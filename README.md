@@ -6,7 +6,7 @@ Built with 20 years of ministry experience in mind.
 ## Quick Start
 
 1. Open `ministry-dashboard.html` in a browser to see your public site
-2. Open `admin-dashboard.html` — password: `church2024` (change this!)
+2. Open `admin.html` and sign in with an administrator account (accounts live in Supabase; there is no shared password)
 3. Customize your church name, address, events, and giving links
 4. Deploy to Netlify (free) by dragging this folder to netlify.com
 
@@ -15,7 +15,7 @@ Built with 20 years of ministry experience in mind.
 | File | What It Is |
 |------|------------|
 | `ministry-dashboard.html` | Public church website |
-| `admin-dashboard.html` | Admin panel (password protected) |
+| `admin.html` | Admin panel (Supabase sign-in) |
 | `service-worker.js` | PWA offline + push notifications |
 | `manifest.json` | Mobile app install config |
 | `IMPLEMENTATION-GUIDE.md` | Full setup instructions |
@@ -33,7 +33,7 @@ Built with 20 years of ministry experience in mind.
 - Contact form
 - Fully mobile responsive (PWA installable)
 
-**Admin Panel** (password: `church2024`)
+**Admin Panel** (Supabase sign-in)
 - Dashboard with stats (members, prayer requests, events, volunteers)
 - Event management (add, edit, delete)
 - Announcement management
@@ -43,14 +43,6 @@ Built with 20 years of ministry experience in mind.
 - Volunteer coordination
 - Push/Email/SMS notification sender
 - Giving overview by platform
-
-## Change Admin Password
-
-In `admin-dashboard.html`, find:
-```js
-const ADMIN_PASS = 'church2024';
-```
-Replace with your own password.
 
 ## Deploy Free
 

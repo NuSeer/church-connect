@@ -21,7 +21,7 @@ Status words: **Verified** = run and passed here · **Untested** = written, not 
 2. Run `phase12-hardening-migration.sql`, set the function secrets, deploy the function, create the webhook (see PUSH-SETUP.md).
 3. Real-phone test of push and of the text buttons on iPhone and Android.
 4. Confirm `messaging-migration.sql` was actually run (the membership notes only mention phase4 + membership).
-5. `admin-dashboard.html` is a legacy page with a hardcoded password (`church2024`) in its source. It now has a Show button but should be retired or removed.
+5. `admin-dashboard.html` (hardcoded password `church2024`) was **removed** at Joy's request; the public ministry page and README now point to `admin.html`. The old password is still in git history, so never reuse it.
 
 ## Phase 11 — multi-church accounts and subscriptions: **Not started**
 Not safe to build blind. The base schema (`schema-phase3.sql`) is not in the repo, and the admin functions (`cc_is_admin()` and the security-definer functions) are church-agnostic, so a second church's admin could act on the first church's data. It needs the real policy export from Supabase, then every function rewritten to be church-scoped.
