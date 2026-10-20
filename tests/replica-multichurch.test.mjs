@@ -59,7 +59,7 @@ insert into public.cc_website_content(id,published,draft) values(1,'{"church":"A
 `);
 
 // --- 4. migrations, in the documented order; each must apply twice
-const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql'];
+const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql', 'events-sync-migration.sql'];
 let bad = 0;
 for (const f of order) {
   const sql = fs.readFileSync(repo + f, 'utf8');
@@ -209,6 +209,28 @@ T('canceled church cannot broadcast', 'ERR This church', await (async () => { aw
 await as(U.P, `select public.cc_platform_set_subscription('${B}','pro','active')`);
 T('church B admin can broadcast to church B', 'ok', await as(U.B1, `select public.cc_send_broadcast('B news','Welcome to Grace Chapel')`));
 T("church A members do not see B's broadcast", 'ok []', await as(U.A3, `select title from public.member_updates where title='B news'`));
+
+
+// --- events from the church website (feed address + rows marked as website-sourced)
+T('new columns exist', 'ok [{"n":"6"}]', await (async () => { const r = await db.query(`select count(*)::text n from information_schema.columns where table_schema='public' and ((table_name='churches' and column_name in ('events_feed_url','events_timezone','events_synced_at','events_sync_status')) or (table_name='church_events' and column_name in ('source','external_id')))`); return 'ok ' + JSON.stringify(r.rows) })());
+T('plain member cannot set the feed address', 'ERR Administrator access required', await as(U.A3, `select public.cc_set_events_feed('https://example.org/api/events')`));
+for (const [label, url] of [['http (not https)', 'http://example.org/e'], ['an IP address', 'https://10.0.0.5/e'], ['localhost', 'https://localhost/e'], ['a name with no dot', 'https://intranet/e'], ['an .internal name', 'https://db.internal/e'], ['text with spaces', 'https://example.org/a b'], ['a javascript link', 'javascript:alert(1)']])
+  T(`feed address rejected: ${label}`, 'ERR', await as(U.A1, `select public.cc_set_events_feed('${url}')`));
+T('admin sets the church feed address', 'ok', await as(U.A1, `select public.cc_set_events_feed('https://newbeginningsoutreachctrcogic.org/api/events','America/New_York')`));
+T('it was stored for church A only', 'ok [{"slug":"default","events_feed_url":"https://newbeginningsoutreachctrcogic.org/api/events"', await (async () => { const r = await db.query(`select slug,events_feed_url,events_sync_status from public.churches where events_feed_url is not null`); return 'ok ' + JSON.stringify(r.rows) })());
+T('status says it is waiting for the first sync', 'ok [{"events_sync_status":"Waiting for first sync"}]', await (async () => { const r = await db.query(`select events_sync_status from public.churches where slug='default'`); return 'ok ' + JSON.stringify(r.rows) })());
+T("church B admin changes only church B's address", 'ok [{"n":"1"}]', await (async () => { await as(U.B1, `select public.cc_set_events_feed('https://grace.example.org/events.json','America/Chicago')`); const r = await db.query(`select count(*)::text n from public.churches where slug='default' and events_feed_url like 'https://newbeginnings%'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('an unknown time zone is rejected', 'ERR Unknown time zone', await as(U.A1, `select public.cc_set_events_feed('https://newbeginningsoutreachctrcogic.org/api/events','Mars/Phobos')`));
+T('anyone can read the church row (public site) but cannot change it', 'ERR', await as(U.A3, `update public.churches set events_feed_url='https://evil.example.org/x'`));
+await db.exec(`insert into public.church_events(church_id,title,starts_at,source,external_id) values('${defaultChurch}','From site','2026-11-01 14:00+00','website','271')`);
+T('the same website event cannot be stored twice for one church', 'ERR', await (async () => { try { await db.exec(`insert into public.church_events(church_id,title,starts_at,source,external_id) values('${defaultChurch}','Dupe','2026-11-01 14:00+00','website','271')`); return 'ok' } catch (e) { return 'ERR ' + e.message } })());
+T('another church may reuse the same website event number', 'ok', await (async () => { try { await db.exec(`insert into public.church_events(church_id,title,starts_at,source,external_id) values('${B}','Other church 271','2026-11-01 14:00+00','website','271')`); return 'ok' } catch (e) { return 'ERR ' + e.message } })());
+T('hand-made events (no source) are never treated as duplicates', 'ok', await (async () => { try { await db.exec(`insert into public.church_events(church_id,title,starts_at) values('${defaultChurch}','Hand 1','2026-11-02 14:00+00'),('${defaultChurch}','Hand 2','2026-11-02 14:00+00')`); return 'ok' } catch (e) { return 'ERR ' + e.message } })());
+T('upsert on (church, source, external id) updates in place', 'ok [{"title":"From site (edited)"}]', await (async () => { await db.exec(`insert into public.church_events(church_id,title,starts_at,source,external_id) values('${defaultChurch}','From site (edited)','2026-11-01 15:00+00','website','271') on conflict (church_id,source,external_id) do update set title=excluded.title,starts_at=excluded.starts_at`); const r = await db.query(`select title from public.church_events where church_id='${defaultChurch}' and source='website' and external_id='271'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('members read synced events like any other event', 'ok [{"title":"From site (edited)"}]', await as(U.A3, `select title from public.church_events where source='website' and church_id='${defaultChurch}'`));
+T("church B members cannot see church A's unpublished synced rows", 'ok []', await (async () => { await db.exec(`update public.church_events set published=false where source='website' and church_id='${defaultChurch}'`); return await as(U.B2, `select title from public.church_events where source='website' and church_id='${defaultChurch}'`) })());
+T('admin clears the address', 'ok', await as(U.A1, `select public.cc_set_events_feed('')`));
+T('clearing removes the feed and the status', 'ok [{"events_feed_url":null,"events_sync_status":null}]', await (async () => { const r = await db.query(`select events_feed_url,events_sync_status from public.churches where slug='default'`); return 'ok ' + JSON.stringify(r.rows) })());
 
 // --- rollback: restores the single-church shape and the original functions
 await db.exec(`reset role`);

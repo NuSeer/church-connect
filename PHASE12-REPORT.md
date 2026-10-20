@@ -38,3 +38,10 @@ See `BROADCAST-SETUP.md`. `broadcast-migration.sql`, Broadcast tab in `connect.h
 - Caught by the browser tests and fixed: an unescaped apostrophe in the pastor button that broke the Membership page.
 - Pre-existing and left alone: `website-public.js` has a syntax error but no page loads it.
 - Not browser-tested: the Give/Remove pastor access button itself (only its SQL).
+
+## Website events + administrator alerts — implemented, tested on fakes/rebuilt copy, not yet on the real project
+See `EVENTS-AND-ALERTS-SETUP.md`.
+- `events-sync-migration.sql`, `supabase/functions/sync-website-events`, admin panel in `admin.html`/`admin.js`, push function handles `member_profiles` and `ministry_join_requests`.
+- `tests/edge-functions.test.mjs` runs the real function code: push (broadcast, sign-up/ministry alerts, church separation, retry de-dup, expired phones) and website sync using the live site's real feed (270 events all mapped; time zones incl. daylight saving; HTML stripped; empty/broken/redirected/internal feeds never wipe or fetch anything).
+- `tests/browser-events-feed.test.mjs` (mock admin sign-in) and extra checks in `tests/replica-multichurch.test.mjs`.
+- Not tested: the real website feed through the real Supabase Edge runtime, phones, and the Cron job.

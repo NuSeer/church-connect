@@ -22,12 +22,33 @@ async function broadcast(m:any){
  for(let i=0;i<ids.length;i+=200){const {data,error}=await db.from('member_push_subscriptions').select('id,endpoint,p256dh,auth').in('user_id',ids.slice(i,i+200));if(error)throw error;subs.push(...(data||[]))}
  return await deliver(subs,JSON.stringify({title:'Church announcement',body:String(m.title||'New message from your church').slice(0,100),view:'updates',messageId:m.id}));
 }
+// Stable id for events that have no single uuid (used so webhook retries do not notify twice).
+async function idFor(text:string){const h=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text))).slice(0,16);h[6]=(h[6]&0x0f)|0x50;h[8]=(h[8]&0x3f)|0x80;const x=[...h].map(b=>b.toString(16).padStart(2,'0')).join('');return `${x.slice(0,8)}-${x.slice(8,12)}-${x.slice(12,16)}-${x.slice(16,20)}-${x.slice(20)}`}
+// Tell a church's administrators and pastors (everyone in church_admins) that someone is waiting for approval.
+async function approvalAlert(title:string,body:string,churchId:string|null,key:string){
+ if(!churchId)return new Response('Ignored',{status:200});
+ const id=await idFor(key);
+ const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:id});
+ if(dupe?.code==='23505')return new Response('Duplicate',{status:200});if(dupe)throw dupe;
+ const {data:admins,error:ae}=await db.from('church_admins').select('user_id').eq('church_id',churchId);if(ae)throw ae;
+ const ids=(admins||[]).map((x:any)=>x.user_id);if(!ids.length)return new Response('No administrators',{status:200});
+ const {data:subs,error:se}=await db.from('member_push_subscriptions').select('id,endpoint,p256dh,auth').in('user_id',ids);if(se)throw se;
+ return await deliver(subs||[],JSON.stringify({title,body:body.slice(0,120),page:'membership',messageId:id}));
+}
+async function joinRequestAlert(m:any){
+ if(!m?.user_id||!m?.ministry_id||m.status!=='pending')return new Response('Ignored',{status:200});
+ const {data:ministry,error:me}=await db.from('ministries').select('name,church_id').eq('id',m.ministry_id).single();if(me||!ministry)throw me||Error('Ministry missing');
+ const {data:person}=await db.from('member_profiles').select('display_name').eq('user_id',m.user_id).maybeSingle();
+ return await approvalAlert('Ministry request',`${String(person?.display_name||'A member').slice(0,60)} asked to join ${String(ministry.name).slice(0,60)}.`,ministry.church_id,`join:${m.user_id}:${m.ministry_id}`);
+}
 Deno.serve(async request=>{
  if(request.method!=='POST')return new Response('Method not allowed',{status:405});
  if(!secret||request.headers.get('x-cc-webhook-secret')!==secret)return new Response('Unauthorized',{status:401});
  try{
   const event=await request.json();const m=event.record;
   if(event.type==='INSERT'&&event.table==='member_updates')return await broadcast(m);
+  if(event.type==='INSERT'&&event.table==='member_profiles')return m?.approved===true?new Response('Ignored',{status:200}):await approvalAlert('New member waiting for approval',`${String(m?.display_name||'Someone').slice(0,60)} asked to join. Tap to review.`,m?.church_id??null,'profile:'+m?.user_id);
+  if(event.type==='INSERT'&&event.table==='ministry_join_requests')return await joinRequestAlert(m);
   if(event.type!=='INSERT'||event.table!=='messages'||!m?.id||!m?.conversation_id||!m?.sender_id)return new Response('Ignored',{status:200});
   // Webhook retries must not notify twice: claim the message id first and stop if another delivery already did.
   const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:m.id});

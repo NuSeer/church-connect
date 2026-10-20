@@ -18,6 +18,10 @@ drop policy if exists cc_churches_read on public.churches; drop policy if exists
 -- broadcast + pastor access (broadcast-migration.sql) depend on the multi-church helpers
 drop function if exists public.cc_can_broadcast(); drop function if exists public.cc_send_broadcast(text,text); drop function if exists public.cc_broadcast_sms_recipients(boolean);
 drop function if exists public.cc_member_access(); drop function if exists public.cc_set_pastor_access(uuid,boolean);
+-- website events sync (events-sync-migration.sql)
+drop function if exists public.cc_set_events_feed(text,text);
+drop index if exists public.church_events_website_uq;
+alter table public.church_events drop column if exists source; alter table public.church_events drop column if exists external_id;
 -- functions: drop the new signatures, then restore the originals
 drop function if exists public.cc_public_website(uuid); drop function if exists public.create_my_profile(text,uuid);
 drop function if exists public.cc_platform_create_church(text,text,uuid); drop function if exists public.cc_platform_set_subscription(uuid,text,text,timestamptz);
