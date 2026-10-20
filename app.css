@@ -35,3 +35,5 @@ body{background:linear-gradient(145deg,#f9f8ff,#f2f6fa 55%,#fff);font-family:Int
 @media(max-width:650px){.membership-row{align-items:stretch;flex-direction:column}.membership-row .actions .btn{flex:1 1 140px}}
 /* Staff directory and ministry administration */
 .membership-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.membership-heading h2{margin:0}.directory-form{margin:20px 0;padding:20px;border:1px solid #ded9f0;border-radius:16px;background:#faf9ff}.directory-form fieldset{border:1px solid #e5e1ef;border-radius:12px;margin:16px 0;padding:10px 16px}.directory-form legend{font-weight:700}.directory-form .checkline{font-size:14px;font-weight:500}.directory-form .checkline input{width:auto}.directory-form .checkbox-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}@media(max-width:640px){.directory-form{padding:12px}.membership-heading .btn{width:100%}}
+
+.cc-ministry-chip{display:inline-block;border-left:5px solid var(--group-color);background:color-mix(in srgb,var(--group-color) 12%,white);padding:5px 9px;margin:5px 5px 0 0;border-radius:6px;font-size:.85rem;font-weight:650}
