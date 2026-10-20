@@ -6,7 +6,7 @@ import fs from 'node:fs';
 const structurePath = process.argv[2], repo = (process.argv[3] || 'D:/Projects/church-connect') + '/';
 let d = JSON.parse(fs.readFileSync(structurePath, 'utf8')); if (typeof d === 'string') d = JSON.parse(d);
 const db = new PGlite();
-const U = {A1: 'a1000000-0000-0000-0000-000000000001', A2: 'a2000000-0000-0000-0000-000000000002', B1: 'b1000000-0000-0000-0000-000000000001', B2: 'b2000000-0000-0000-0000-000000000002', P: 'f0000000-0000-0000-0000-00000000000f', X: 'e0000000-0000-0000-0000-00000000000e'};
+const U = {A1: 'a1000000-0000-0000-0000-000000000001', A2: 'a2000000-0000-0000-0000-000000000002', B1: 'b1000000-0000-0000-0000-000000000001', B2: 'b2000000-0000-0000-0000-000000000002', P: 'f0000000-0000-0000-0000-00000000000f', X: 'e0000000-0000-0000-0000-00000000000e', A3: 'a3000000-0000-0000-0000-000000000003'};
 
 await db.exec(`
 create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
@@ -59,7 +59,7 @@ insert into public.cc_website_content(id,published,draft) values(1,'{"church":"A
 `);
 
 // --- 4. migrations, in the documented order; each must apply twice
-const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql'];
+const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql'];
 let bad = 0;
 for (const f of order) {
   const sql = fs.readFileSync(repo + f, 'utf8');
@@ -168,6 +168,47 @@ T('members cannot TRUNCATE', 'ERR', await as(U.A1, `truncate public.church_event
 T('anon cannot write events', 'ERR', await run('anon', '', `insert into public.church_events(title,starts_at,church_id) values('x',now(),'${defaultChurch}')`));
 T('nobody can change the platform owner list', 'ERR', await as(U.A1, `insert into public.cc_platform_admins values('${U.A1}')`));
 T('nobody can read the platform owner list', 'ERR', await as(U.A1, `select * from public.cc_platform_admins`));
+
+
+// --- church-wide broadcast + pastor access
+await db.exec(`insert into public.member_profiles(user_id,display_name,approved,directory_visible,church_id) values('${U.A3}','Member A3',true,true,'${defaultChurch}')`);
+await db.exec(`insert into public.member_sms_preferences(user_id,phone,opted_in,has_app) values('${U.A2}','+19045550101',true,false),('${U.B2}','+19045550202',true,false)`);
+T('admin can broadcast (cc_can_broadcast)', 'ok [{"cc_can_broadcast":true}]', await as(U.A1, `select public.cc_can_broadcast()`));
+T('plain member cannot broadcast (cc_can_broadcast)', 'ok [{"cc_can_broadcast":false}]', await as(U.A3, `select public.cc_can_broadcast()`));
+T('plain member is refused when sending', 'ERR Only administrators and pastors', await as(U.A3, `select public.cc_send_broadcast('Hi','There')`));
+T('admin sends a broadcast', 'ok', await as(U.A1, `select public.cc_send_broadcast('Sunday moved','Service is at 11am')`));
+T('title and message are validated', 'ERR Title must be', await as(U.A1, `select public.cc_send_broadcast('x','body')`));
+T('members of the same church see it under Updates', 'ok [{"title":"Sunday moved"}]', await as(U.A3, `select title from public.member_updates where ministry_id is null`));
+T("another church's members do NOT see it", 'ok []', await as(U.B2, `select title from public.member_updates where title='Sunday moved'`));
+T('broadcast row carries the right church and no ministry', 'ok [{"n":"1"}]', await (async () => { const r = await db.query(`select count(*)::text n from public.member_updates where title='Sunday moved' and church_id='${defaultChurch}' and ministry_id is null`); return 'ok ' + JSON.stringify(r.rows) })());
+// pastor access
+T('plain member cannot grant pastor access', 'ERR Administrator access required', await as(U.A3, `select public.cc_set_pastor_access('${U.A2}',true)`));
+T('admin cannot change own access', 'ERR You cannot change your own access', await as(U.A1, `select public.cc_set_pastor_access('${U.A1}',false)`));
+T("another church's admin cannot grant access to A's member", 'ERR Select an approved member', await (async () => { await as(U.P, `select public.cc_platform_set_subscription('${B}','pro','active')`); return await as(U.B1, `select public.cc_set_pastor_access('${U.A2}',true)`) })());
+T('before: member cannot open admin pages (no church_admins row)', 'ok []', await as(U.A2, `select user_id from public.church_admins`));
+T('admin gives A2 pastor access', 'ok', await as(U.A1, `select public.cc_set_pastor_access('${U.A2}',true)`));
+T('pastor can now pass the admin-page check', 'ok [{"user_id":"' + U.A2 + '"}]', await as(U.A2, `select user_id from public.church_admins`));
+T('pastor has admin functions (cc_is_admin)', 'ok [{"cc_is_admin":true}]', await as(U.A2, `select public.cc_is_admin()`));
+T('pastor can add directory members', 'ok', await as(U.A2, `select public.cc_save_directory_member(null,'Added by pastor','9045559999',null,'Bro.','{}',null,null,false,'{}',true)`));
+T('pastor can broadcast', 'ok', await as(U.A2, `select public.cc_send_broadcast('From the pastor','Prayer tonight at 7')`));
+T("pastor still cannot reach another church's data", 'ok []', await as(U.A2, `select * from public.cc_directory_members where full_name='Sister B'`));
+T('access list shows only my church', 'ok [{"n":"3"}]', await as(U.A1, `select count(*)::text n from public.cc_member_access()`));
+T('access list flags the pastor', 'ok [{"user_id":"' + U.A2 + '"', await as(U.A1, `select user_id,is_pastor from public.cc_member_access() where is_pastor`));
+T('cannot remove access from someone never given it', 'ERR This person was not given pastor access', await as(U.A1, `select public.cc_set_pastor_access('${U.A3}',false)`));
+T('admin removes pastor access', 'ok', await as(U.A1, `select public.cc_set_pastor_access('${U.A2}',false)`));
+T('former pastor is no longer an admin', 'ok []', await as(U.A2, `select user_id from public.church_admins`));
+T('former pastor can no longer broadcast', 'ERR Only administrators and pastors', await as(U.A2, `select public.cc_send_broadcast('x1','y')`));
+// texting the broadcast
+T('broadcast text list = opted-in app-less members + consented directory members, own church only', 'ok [{"n":"3"}]', await as(U.A1, `select count(*)::text n from public.cc_broadcast_sms_recipients(true)`));
+T("another church's numbers are never included", 'ok [{"n":"0"}]', await as(U.A1, `select count(*)::text n from public.cc_broadcast_sms_recipients(false) where phone like '%0202'`));
+T('plain member cannot list numbers to text', 'ERR Only administrators and pastors', await as(U.A3, `select * from public.cc_broadcast_sms_recipients(true)`));
+// limits and subscription
+await db.exec(`insert into public.member_updates(church_id,title,body,created_by,created_at) select '${defaultChurch}','filler '||g,'x','${U.A1}',now() from generate_series(1,8) g`);
+T('11th broadcast within an hour is blocked', 'ERR Too many broadcasts', await as(U.A1, `select public.cc_send_broadcast('One too many','x')`));
+T('canceled church cannot broadcast', 'ERR This church', await (async () => { await as(U.P, `select public.cc_platform_set_subscription('${B}','pro','canceled')`); return await as(U.B1, `select public.cc_send_broadcast('Late news','x')`) })());
+await as(U.P, `select public.cc_platform_set_subscription('${B}','pro','active')`);
+T('church B admin can broadcast to church B', 'ok', await as(U.B1, `select public.cc_send_broadcast('B news','Welcome to Grace Chapel')`));
+T("church A members do not see B's broadcast", 'ok []', await as(U.A3, `select title from public.member_updates where title='B news'`));
 
 // --- rollback: restores the single-church shape and the original functions
 await db.exec(`reset role`);

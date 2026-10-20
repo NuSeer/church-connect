@@ -7,11 +7,27 @@ const key=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const secret=Deno.env.get('CC_PUSH_WEBHOOK_SECRET')!;
 webpush.setVapidDetails('mailto:'+Deno.env.get('CC_VAPID_CONTACT_EMAIL')!,Deno.env.get('CC_VAPID_PUBLIC_KEY')!,Deno.env.get('CC_VAPID_PRIVATE_KEY')!);
 const db=createClient(url,key,{auth:{persistSession:false}});
+async function deliver(subs:any[],payload:string){
+ const results=await Promise.allSettled(subs.map(async (s:any)=>{try{await webpush.sendNotification({endpoint:s.endpoint,keys:{p256dh:s.p256dh,auth:s.auth}},payload,{TTL:86400})}catch(err:any){if(err.statusCode===404||err.statusCode===410)await db.from('member_push_subscriptions').delete().eq('id',s.id);throw err}}));
+ return Response.json({attempted:results.length,accepted:results.filter(r=>r.status==='fulfilled').length,failed:results.filter(r=>r.status==='rejected').length});
+}
+// Church-wide broadcast: a member_updates row with no ministry goes to every approved member of that church. The title (not private) is shown.
+async function broadcast(m:any){
+ if(!m?.id||!m?.church_id||m.ministry_id)return new Response('Ignored',{status:200});
+ const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:m.id});
+ if(dupe?.code==='23505')return new Response('Duplicate',{status:200});if(dupe)throw dupe;
+ const {data:people,error:pe}=await db.from('member_profiles').select('user_id').eq('church_id',m.church_id).eq('approved',true);if(pe)throw pe;
+ const ids=(people||[]).map((x:any)=>x.user_id).filter((id:string)=>id!==m.created_by);if(!ids.length)return new Response('No recipients',{status:200});
+ const subs:any[]=[];
+ for(let i=0;i<ids.length;i+=200){const {data,error}=await db.from('member_push_subscriptions').select('id,endpoint,p256dh,auth').in('user_id',ids.slice(i,i+200));if(error)throw error;subs.push(...(data||[]))}
+ return await deliver(subs,JSON.stringify({title:'Church announcement',body:String(m.title||'New message from your church').slice(0,100),view:'updates',messageId:m.id}));
+}
 Deno.serve(async request=>{
  if(request.method!=='POST')return new Response('Method not allowed',{status:405});
  if(!secret||request.headers.get('x-cc-webhook-secret')!==secret)return new Response('Unauthorized',{status:401});
  try{
   const event=await request.json();const m=event.record;
+  if(event.type==='INSERT'&&event.table==='member_updates')return await broadcast(m);
   if(event.type!=='INSERT'||event.table!=='messages'||!m?.id||!m?.conversation_id||!m?.sender_id)return new Response('Ignored',{status:200});
   // Webhook retries must not notify twice: claim the message id first and stop if another delivery already did.
   const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:m.id});
@@ -25,7 +41,6 @@ Deno.serve(async request=>{
   const recipients=(approved||[]).map((x:any)=>x.user_id);if(!recipients.length)return new Response('No approved recipients',{status:200});
   const {data:subs,error:se}=await db.from('member_push_subscriptions').select('id,endpoint,p256dh,auth').in('user_id',recipients);if(se)throw se;
   const payload=JSON.stringify({title:conversation.kind==='ministry'?'New ministry message':'New private message',body:'You have a new message in Church Connect.',conversationId:m.conversation_id,messageId:m.id});
-  const results=await Promise.allSettled((subs||[]).map(async (s:any)=>{try{await webpush.sendNotification({endpoint:s.endpoint,keys:{p256dh:s.p256dh,auth:s.auth}},payload,{TTL:86400})}catch(err:any){if(err.statusCode===404||err.statusCode===410)await db.from('member_push_subscriptions').delete().eq('id',s.id);throw err}}));
-  return Response.json({attempted:results.length,accepted:results.filter(r=>r.status==='fulfilled').length,failed:results.filter(r=>r.status==='rejected').length});
+  return await deliver(subs||[],payload);
  }catch(err){console.error(err);return new Response('Push dispatch error',{status:500})}
 });

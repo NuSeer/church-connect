@@ -30,3 +30,11 @@ Built from the live-structure export (2026-10-20). See `MULTICHURCH-SETUP.md`.
 - Found while testing and fixed: administrator functions bypass table locks, so the subscription lock is also enforced inside them.
 - Findings from the live export: `messaging-migration.sql` had never been run (unread counts/read markers missing); the public (anon) role had every table permission including TRUNCATE (now revoked).
 - Still open: payments, per-church branding/domains, and a platform dashboard page.
+
+## Church-wide broadcast + pastor access — implemented, tested on a rebuilt copy, not yet on the real project
+See `BROADCAST-SETUP.md`. `broadcast-migration.sql`, Broadcast tab in `connect.html`/`connect.js`, pastor-access button in `membership.js`, push function handles `member_updates`.
+- SQL: 30+ checks in `tests/replica-multichurch.test.mjs` (pastor/admin only, same-church only, 10-per-hour limit, subscription lock, text list limited to consenting people in the same church, pastor access grant/remove, own-access guard).
+- Screens: `tests/browser-broadcast.test.mjs` (mock sign-in): tab shows only for those allowed, sends the typed text, builds one `sms:` link per person, `?view=` opens a tab.
+- Caught by the browser tests and fixed: an unescaped apostrophe in the pastor button that broke the Membership page.
+- Pre-existing and left alone: `website-public.js` has a syntax error but no page loads it.
+- Not browser-tested: the Give/Remove pastor access button itself (only its SQL).

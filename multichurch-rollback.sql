@@ -15,6 +15,9 @@ do $$ declare r record; begin
  end loop; end $$;
 drop policy if exists cc_churches_read on public.churches; drop policy if exists cc_subscription_read on public.church_subscriptions;
 
+-- broadcast + pastor access (broadcast-migration.sql) depend on the multi-church helpers
+drop function if exists public.cc_can_broadcast(); drop function if exists public.cc_send_broadcast(text,text); drop function if exists public.cc_broadcast_sms_recipients(boolean);
+drop function if exists public.cc_member_access(); drop function if exists public.cc_set_pastor_access(uuid,boolean);
 -- functions: drop the new signatures, then restore the originals
 drop function if exists public.cc_public_website(uuid); drop function if exists public.create_my_profile(text,uuid);
 drop function if exists public.cc_platform_create_church(text,text,uuid); drop function if exists public.cc_platform_set_subscription(uuid,text,text,timestamptz);

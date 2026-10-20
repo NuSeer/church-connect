@@ -5,6 +5,7 @@ self.addEventListener('push',event=>{
  const title=String(data.title||'Church Connect');
  const target=new URL('./connect.html',self.registration.scope);
  if(data.conversationId&&/^[0-9a-f-]{36}$/i.test(data.conversationId))target.searchParams.set('conversation',data.conversationId);
+ else if(data.view==='updates')target.searchParams.set('view','updates');
  event.waitUntil(self.registration.showNotification(title,{body:String(data.body||'You have a new message.').slice(0,160),icon:'./icon-192.png',badge:'./icon-192.png',tag:'cc-message-'+(data.messageId||Date.now()),data:{url:target.href}}));
 });
 self.addEventListener('notificationclick',event=>{
