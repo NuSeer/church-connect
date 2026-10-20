@@ -1,0 +1,18 @@
+import {db} from './data.js';
+const $=id=>document.getElementById(id);
+const fields=['churchName','tagline','heroTitle','aboutTitle','aboutBody','serviceInfo','contactEmail','address'];
+const defaults={churchName:window.CHURCH_CONFIG?.name||'Your Church',tagline:window.CHURCH_CONFIG?.tagline||'',heroTitle:"There's a place for you here.",aboutTitle:'More than a place to worship.',aboutBody:'Welcome to our church family.',serviceInfo:'',contactEmail:'',address:''};
+const status=s=>$('status').textContent=s;
+const show=(id,v)=>$(id).classList.toggle('hidden',!v);
+let isEnabled=true;
+function values(){return Object.fromEntries(fields.map(id=>[id,$(id).value.trim()]))}
+function populate(o){for(const id of fields)$(id).value=typeof o?.[id]==='string'?o[id]:defaults[id];render()}
+function text(tag,value,klass){const e=document.createElement(tag);e.textContent=value||'';if(klass)e.className=klass;return e}
+function render(){const v=values(),p=$('preview');p.replaceChildren();const hero=document.createElement('div');hero.className='studio-hero';hero.append(text('div',v.churchName,'studio-name'),text('h2',v.heroTitle),text('p',v.tagline));p.append(hero);const about=document.createElement('div');about.className='studio-section';about.append(text('h3',v.aboutTitle),text('p',v.aboutBody));p.append(about);const info=document.createElement('div');info.className='studio-section';info.append(text('h3','Visit & contact'),text('p',v.serviceInfo),text('p',v.address),text('p',v.contactEmail,'studio-muted'));p.append(info)}
+for(const id of fields)$(id).addEventListener('input',render);
+async function init(){if(!db)return status('Supabase is not configured.');const {data:{session},error}=await db.auth.getSession();if(error)return status(error.message);if(!session?.user){show('auth',true);show('editor',false);return status('Sign in to this preview domain.')}const a=await db.from('church_admins').select('user_id').eq('user_id',session.user.id).maybeSingle();if(a.error||!a.data){show('auth',false);show('editor',false);return status('Church administrator access required.')}const r=await db.from('cc_website_content').select('enabled,draft,published').eq('id',1).maybeSingle();if(r.error)return status('Run phase5-website-migration.sql first: '+r.error.message);show('auth',false);show('editor',true);isEnabled=r.data?.enabled??true;$('enabled').checked=isEnabled;populate(Object.keys(r.data?.draft||{}).length?r.data.draft:r.data?.published);status('Draft ready. Changes are not public until you publish.')}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();const {error}=await db.auth.signInWithPassword({email:$('email').value,password:$('password').value});$('password').value='';if(error)return status(error.message);await init()});
+$('saveDraft').onclick=async()=>{status('Saving draft…');const {error}=await db.rpc('cc_save_website_draft',{p_content:values()});status(error?'Save failed: '+error.message:'Draft saved. Public website unchanged.')};
+$('publish').onclick=async()=>{status('Publishing…');const saved=await db.rpc('cc_save_website_draft',{p_content:values()});if(saved.error)return status('Save failed: '+saved.error.message);const {error}=await db.rpc('cc_publish_website');status(error?'Publish failed: '+error.message:'Published. Open the public website to verify.')};
+$('enabled').onchange=async()=>{const wanted=$('enabled').checked;const {error}=await db.rpc('cc_toggle_website',{p_enabled:wanted});if(error){$('enabled').checked=!wanted;return status('Unable to update website visibility: '+error.message)}isEnabled=wanted;status(wanted?'Public website enabled.':'Public website disabled; member portal remains available.')};
+await init();
