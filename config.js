@@ -6,7 +6,7 @@ window.CHURCH_CONFIG = {
   // If the church already has a website, provide its HTTPS address.
   existingWebsiteUrl: '',
   // Generate VAPID keys and set the public key here. See PUSH-SETUP.md.
-  vapidPublicKey: '',
+  vapidPublicKey: 'BP38ZyxA9W__ujZDa_LenX8qd8Bgr0BaCFLpqmSo-YSD-kc2sNdoBhDEATbuiPjLvKNThE7umKf8YRwvFDBzj5U',
   tagline: 'A place to belong. A community to grow.',
   supabaseUrl: 'https://vizcmyqyoaazkcytcunp.supabase.co',
   supabaseAnonKey: 'sb_publishable_ugyikgHimwHU3wGMFmxojg_qGYRCg61'

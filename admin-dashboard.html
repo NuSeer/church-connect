@@ -941,5 +941,8 @@
     setTimeout(() => t.classList.remove('show'), 3000);
   }
 </script>
-</body>
+<script>
+// Show/Hide for the legacy admin password box.
+(function(){var i=document.getElementById('pwField');if(!i)return;var b=document.createElement('button');b.type='button';b.textContent='Show';b.setAttribute('aria-label','Show password');b.setAttribute('aria-pressed','false');b.style.cssText='margin:6px 0;padding:6px 12px;cursor:pointer';b.onclick=function(){var h=i.type==='password';i.type=h?'text':'password';b.textContent=h?'Hide':'Show';b.setAttribute('aria-label',(h?'Hide':'Show')+' password');b.setAttribute('aria-pressed',String(h))};i.after(b)})();
+</script></body>
 </html>

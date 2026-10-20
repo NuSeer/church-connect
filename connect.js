@@ -80,14 +80,19 @@ async function preparePhoneSms(body,conversationId){
  const onlyWithoutApp=$('onlyWithoutApp').checked;
  const {data,error}=await db.rpc('cc_phone_sms_recipients',{p_conversation_id:conversationId,p_without_app:onlyWithoutApp});
  if(error)return notice('In-app message sent. Text handoff unavailable: '+error.message);
- const phones=[...new Set((data||[]).map(x=>x.phone).filter(Boolean))];
+ // Staff-entered members have no app account. Only administrators and ministry leaders may receive their numbers; for anyone else this call is refused, which is expected.
+ const dir=await db.rpc('cc_directory_sms_recipients',{p_conversation_id:conversationId});
+ const phones=[...new Set([...(data||[]),...(dir.error?[]:dir.data||[])].map(x=>x.phone).filter(Boolean))];
  if(!phones.length)return notice('In-app message sent. No eligible opted-in SMS recipients for this conversation.');
- const recipientList=phones.join(',');
- const uri='sms:'+recipientList+'?body='+encodeURIComponent(body);
- // Mobile platforms differ in multi-recipient SMS URI support. Allow manual copy fallback.
- const link=document.createElement('a');link.href=uri;link.textContent='Open messaging app for '+phones.length+' recipient(s)';link.className='btn secondary';link.style.display='inline-block';link.style.marginTop='10px';link.id='smsHandoff';
- document.getElementById('smsHandoff')?.remove();$('smsHelp').after(link);
- notice('In-app message sent. Tap “Open messaging app” to send texts separately. Phone replies will NOT appear in Church Connect.');
+ const holder=document.createElement('div');holder.id='smsHandoff';holder.style.marginTop='10px';
+ const uri=p=>'sms:'+p+'?body='+encodeURIComponent(body);
+ const link=(href,text)=>{const a=document.createElement('a');a.href=href;a.textContent=text;a.className='btn secondary';a.style.cssText='display:inline-block;margin:4px 6px 4px 0';return a};
+ // One at a time keeps recipients' numbers private from each other. A group text shows everyone's number to everyone.
+ if($('smsMode').value==='single')phones.forEach((p,i)=>holder.append(link(uri(p),'Text recipient '+(i+1)+' of '+phones.length+' (ends '+p.slice(-4)+')')));
+ else holder.append(link(uri(phones.join(',')),'Open messaging app for '+phones.length+' recipient(s)'));
+ // Mobile platforms differ in multi-recipient SMS URI support; one-at-a-time is the reliable fallback.
+ document.getElementById('smsHandoff')?.remove();$('smsHelp').after(holder);
+ notice('In-app message sent. Tap the text button(s) to send from your phone. Phone replies will NOT appear in Church Connect.');
 }
 // Preferences are loaded after the member portal becomes available.
 

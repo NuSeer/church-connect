@@ -13,6 +13,9 @@ Deno.serve(async request=>{
  try{
   const event=await request.json();const m=event.record;
   if(event.type!=='INSERT'||event.table!=='messages'||!m?.id||!m?.conversation_id||!m?.sender_id)return new Response('Ignored',{status:200});
+  // Webhook retries must not notify twice: claim the message id first and stop if another delivery already did.
+  const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:m.id});
+  if(dupe?.code==='23505')return new Response('Duplicate',{status:200});if(dupe)throw dupe;
   const {data:conversation,error:ce}=await db.from('conversations').select('id,kind,ministry_id').eq('id',m.conversation_id).single();if(ce||!conversation)throw ce||Error('Conversation missing');
   const {data:direct,error:de}=await db.from('conversation_members').select('user_id').eq('conversation_id',m.conversation_id);if(de)throw de;
   const ids=new Set((direct||[]).map((x:any)=>x.user_id));
