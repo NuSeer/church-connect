@@ -2,6 +2,6 @@
 window.CHURCH_CONFIG = {
   name: 'Your Church',
   tagline: 'A place to belong. A community to grow.',
-  supabaseUrl: 'https://vizcmyqyoaazkcytcunp.supabase.co/rest/v1/',
+  supabaseUrl: 'https://vizcmyqyoaazkcytcunp.supabase.co',
   supabaseAnonKey: 'sb_publishable_ugyikgHimwHU3wGMFmxojg_qGYRCg61'
 };
