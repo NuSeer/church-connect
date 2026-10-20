@@ -5,6 +5,8 @@ window.CHURCH_CONFIG = {
   modules: {messaging:true,membership:true,ministries:true,website:false,giving:false},
   // If the church already has a website, provide its HTTPS address.
   existingWebsiteUrl: '',
+  // Generate VAPID keys and set the public key here. See PUSH-SETUP.md.
+  vapidPublicKey: '',
   tagline: 'A place to belong. A community to grow.',
   supabaseUrl: 'https://vizcmyqyoaazkcytcunp.supabase.co',
   supabaseAnonKey: 'sb_publishable_ugyikgHimwHU3wGMFmxojg_qGYRCg61'
