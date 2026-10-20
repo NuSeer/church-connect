@@ -11,3 +11,22 @@
 body[data-font-style="classic"] main,body[data-font-style="classic"] .hero{font-family:Georgia,serif}body[data-font-style="elegant"] main,body[data-font-style="elegant"] .hero{font-family:'Times New Roman',Georgia,serif}body[data-font-style="friendly"] main,body[data-font-style="friendly"] .hero{font-family:'Trebuchet MS',Verdana,sans-serif}
 
 .media-upload,.section-edit-card,.page-builder{border:1px solid rgba(125,125,125,.25);border-radius:14px;padding:16px;margin:14px 0}.section-edit-card{background:rgba(120,120,120,.05)}.section-edit-card label{display:block;margin:10px 0}.section-edit-card input,.section-edit-card textarea{display:block;width:100%;box-sizing:border-box}.section-edit-card textarea{min-height:90px}.cc-custom-section img{max-height:250px;object-fit:cover;border-radius:10px}.media-upload input{max-width:100%}
+
+/* Sanctuary Studio — updated administration experience */
+body:has(.sanctuary-toolbar){background:#f4f6fb;color:#19283e}
+body:has(.sanctuary-toolbar) .admin-wrap{max-width:1500px}
+body:has(.sanctuary-toolbar) .admin-wrap>h1{font-family:Georgia,serif;font-size:clamp(2.2rem,4vw,3.4rem);letter-spacing:-.035em;margin:.15em 0}
+.sanctuary-toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;background:linear-gradient(120deg,#16253d,#304968);border-radius:20px;padding:22px 26px;color:#fff;box-shadow:0 12px 35px #17253d24}
+.sanctuary-toolbar strong{font-size:1.18rem;display:block}.sanctuary-toolbar span{display:block;color:#d3deec;font-size:.88rem;margin-top:4px}
+.sanctuary-toolbar-actions{display:flex;gap:8px;flex-wrap:wrap}.sanctuary-toolbar .btn{font-size:.82rem;padding:9px 13px;background:#ffffff17;border:1px solid #ffffff50;color:white}
+.sanctuary-tabs{display:flex;flex-wrap:wrap;gap:7px;margin:18px 0 8px;padding:9px;background:white;border:1px solid #e2e7f0;border-radius:16px;position:sticky;top:0;z-index:10;box-shadow:0 5px 22px #1a2a4510}
+.sanctuary-tabs button{cursor:pointer;border:0;border-radius:10px;background:transparent;color:#2e415c;padding:10px 13px;font-weight:650}
+.sanctuary-tabs button:hover,.sanctuary-tabs button[aria-current="true"]{background:#e9edf6;color:#14243a}
+body:has(.sanctuary-toolbar) .studio-layout{grid-template-columns:minmax(350px,1fr) minmax(320px,.94fr);align-items:start}
+body:has(.sanctuary-toolbar) .studio-layout>.panel{background:#fff;border:1px solid #e0e6f0;border-radius:20px;box-shadow:0 8px 32px #17243d0c}
+body:has(.sanctuary-toolbar) .studio-fields h3.studio-group-heading{font-size:1.3rem;padding-top:20px;border-top:1px solid #e7ebf2;scroll-margin-top:95px}
+#brandTitle,#pageBuilderTitle,#givingPanel,#publishPanel{scroll-margin-top:100px}
+body:has(.sanctuary-toolbar) .studio-preview{position:sticky;top:88px;max-height:calc(100vh - 105px);overflow:auto}
+.sanctuary-mobile-preview .studio-preview-inner{width:min(100%,390px);margin:0 auto;box-shadow:0 10px 38px #1020382b}
+.sanctuary-mobile-preview .studio-preview-inner .cc-photo-left,.sanctuary-mobile-preview .studio-preview-inner .cc-photo-right{background-size:cover!important;padding:28px!important}
+@media(max-width:980px){body:has(.sanctuary-toolbar) .studio-layout{grid-template-columns:1fr}body:has(.sanctuary-toolbar) .studio-preview{position:static;max-height:none}.sanctuary-tabs{position:static}}
