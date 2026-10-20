@@ -85,7 +85,7 @@ $('publish').onclick=async()=>{
   status('Publishing saved changes…');
   const published=await db.rpc('cc_publish_website');
   if(published.error)throw new Error('Publishing failed: '+published.error.message);
-  const check=await db.rpc('cc_public_website');
+  const mineId=(await db.rpc('cc_my_church_id')).data;const check=await db.rpc('cc_public_website',mineId?{p_church:mineId}:{});
   if(check.error)throw new Error('Verification failed: '+check.error.message);
   if(!check.data||check.data.enabled===false)throw new Error('Website is disabled or no public content was returned.');
   if(check.data.pastorName!==expected.pastorName||check.data.heroTitle!==expected.heroTitle||check.data.churchName!==expected.churchName)throw new Error('Published data does not match the editor. Please retry.');

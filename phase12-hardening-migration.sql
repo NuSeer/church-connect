@@ -45,3 +45,17 @@ begin
 end $$;
 revoke all on function public.cc_directory_sms_recipients(uuid) from public;
 grant execute on function public.cc_directory_sms_recipients(uuid) to authenticated;
+
+-- 4. Least privilege. The live database exported on 2026-10-20 showed the public (anon) role holding full rights, including TRUNCATE,
+-- on every table. Row-level security already blocks reads and writes, but TRUNCATE ignores it, so remove what is not needed.
+do $$
+declare t text;
+begin
+ for t in select tablename from pg_tables where schemaname='public' and tablename<>'churches' loop
+  execute format('revoke all on public.%I from anon',t);
+  execute format('revoke truncate,references,trigger on public.%I from authenticated',t);
+ end loop;
+end $$;
+-- The public website only needs to read published events, announcements and active giving links.
+grant select on public.church_events, public.church_announcements, public.church_giving_links to anon;
+do $$ begin if to_regclass('public.churches') is not null then execute 'grant select on public.churches to anon'; end if; end $$;

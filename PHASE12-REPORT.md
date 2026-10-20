@@ -23,5 +23,10 @@ Status words: **Verified** = run and passed here · **Untested** = written, not 
 4. Confirm `messaging-migration.sql` was actually run (the membership notes only mention phase4 + membership).
 5. `admin-dashboard.html` (hardcoded password `church2024`) was **removed** at Joy's request; the public ministry page and README now point to `admin.html`. The old password is still in git history, so never reuse it.
 
-## Phase 11 — multi-church accounts and subscriptions: **Not started**
-Not safe to build blind. The base schema (`schema-phase3.sql`) is not in the repo, and the admin functions (`cc_is_admin()` and the security-definer functions) are church-agnostic, so a second church's admin could act on the first church's data. It needs the real policy export from Supabase, then every function rewritten to be church-scoped.
+## Phase 11 — multi-church accounts and subscriptions: **Implemented, tested on a rebuilt copy, not yet run on the real project**
+Built from the live-structure export (2026-10-20). See `MULTICHURCH-SETUP.md`.
+- `multichurch-migration.sql`, `multichurch-rollback.sql` (restores the exported original functions), updated `phase12-hardening-migration.sql`.
+- `tests/replica-multichurch.test.mjs` rebuilds your real 24 tables, 23 functions and 57 policies from the export, applies the migrations (each twice), and runs 70+ checks: two churches cannot see or change each other's data (including through every administrator function), anonymous visitors only see published public data, a canceled or expired church becomes read-only, sign-up needs a church when there are several, and the rollback works.
+- Found while testing and fixed: administrator functions bypass table locks, so the subscription lock is also enforced inside them.
+- Findings from the live export: `messaging-migration.sql` had never been run (unread counts/read markers missing); the public (anon) role had every table permission including TRUNCATE (now revoked).
+- Still open: payments, per-church branding/domains, and a platform dashboard page.

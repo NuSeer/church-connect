@@ -14,7 +14,7 @@ const port = server.address().port;
 const browser = await puppeteer.launch({executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: 'new', args: ['--no-sandbox']});
 let fails = 0; const T = (n, ok, extra = '') => { if (!ok) fails++; console.log((ok ? 'PASS ' : 'FAIL ') + n + (extra ? ' => ' + extra : '')) };
 
-for (const page of ['connect', 'admin', 'admin-center', 'membership', 'ministries-admin', 'website-editor', 'reset-password', 'admin-dashboard', 'index']) {
+for (const page of ['connect', 'admin', 'admin-center', 'membership', 'ministries-admin', 'website-editor', 'reset-password', 'index']) {
   const tab = await browser.newPage(); const errors = []; const recoverCalls = [];
   tab.on('pageerror', e => errors.push(e.message));
   tab.on('console', m => { if (m.type() === 'error') errors.push(m.text()) });
