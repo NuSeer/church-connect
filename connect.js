@@ -1,3 +1,8 @@
+const ccModules=window.CHURCH_CONFIG?.modules;
+if(ccModules && !ccModules.messaging && !ccModules.membership && !ccModules.ministries){
+  document.body.innerHTML='<main class="admin-wrap"><h1>Member services are not enabled</h1><p>Please contact your church administrator.</p><a href="church-portal.html">Return to portal</a></main>';
+  throw new Error('Member modules disabled in this deployment');
+}
 import {db,escapeHTML as e,fmt} from './data.js';
 const $=id=>document.getElementById(id);const show=(id,on)=>$(id).classList.toggle('hidden',!on);
 let me=null,profile=null,activeConversation=null,conversations=[],ministries=[],directory=[];let allMinistries=[];let approvedMinistryIds=new Set();let channel=null;let unreadCounts=new Map();

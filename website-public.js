@@ -3,3 +3,12 @@ if(db){try{const {data,error}=await db.rpc('cc_public_website');if(!error&&data)
 
 // Additional published sections use the same public-only RPC; drafts are never exposed here.
 if(db){try{const {data,error}=await db.rpc('cc_public_website');if(!error&&data?.enabled!==false&&Array.isArray(data?.sections)){const host=document.querySelector('main');for(const item of data.sections.slice(0,40)){if(!item||typeof item!=='object')continue;const section=document.createElement('section');section.className='section cc-public-custom';const container=document.createElement('div');container.className='container';const title=document.createElement('h2');title.textContent=String(item.title||'');container.append(title);if(typeof item.image==='string'&&/^https:\/\//i.test(item.image)){const img=document.createElement('img');img.src=item.image;img.alt=String(item.title||'Church image');img.loading='lazy';img.style.maxWidth='100%';container.append(img)}if(item.body){const body=document.createElement('p');body.textContent=String(item.body);container.append(body)}if(item.type==='cta'&&typeof item.link==='string'&&/^https:\/\//i.test(item.link)){const a=document.createElement('a');a.href=item.link;a.target='_blank';a.rel='noopener noreferrer';a.className='btn';a.textContent='Learn more';container.append(a)}section.append(container);host?.append(section)}}}catch(error){console.warn('Additional sections unavailable',error)}}
+
+// Navigation is configurable per published website. Missing navigation data uses the starter menu.
+if(db){try{const {data,error}=await db.rpc('cc_public_website');if(!error&&data&&data.enabled!==false&&Array.isArray(data.navigation)){
+ const menu=document.querySelector('header.nav nav.links');if(menu){menu.replaceChildren();for(const item of data.navigation.slice(0,30)){
+ if(!item||item.visible===false||typeof item.label!=='string'||typeof item.href!=='string')continue;
+ const url=item.href.trim();if(!(/^#[a-zA-Z][\w-]*$/.test(url)||/^[a-z0-9-]+\.html(?:#[\w-]+)?$/i.test(url)||/^https:\/\/[^\s<>"']+$/.test(url)))continue;
+ const a=document.createElement('a');a.textContent=item.label.slice(0,60);a.href=url;if(/^https:\/\//.test(url)){a.target='_blank';a.rel='noopener noreferrer'}menu.append(a);
+ }}}
+}catch(e){console.warn('Navigation unavailable',e)}}
