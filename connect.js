@@ -11,7 +11,7 @@ document.querySelectorAll('[data-church]').forEach(el=>el.textContent=window.CHU
 function notice(s){$('notice').textContent=s}function fail(error){notice(error?.message||String(error))}
 function item(text){const d=document.createElement('div');d.className='list-item';d.textContent=text;return d}
 function btn(text,handler){const b=document.createElement('button');b.className='btn secondary';b.textContent=text;b.onclick=handler;return b}
-async function init(){if(!db){notice('Setup required: configure Supabase in config.js and run schema-phase3.sql.');show('signin',false);return}const {data:{user}}=await db.auth.getUser();me=user;show('signin',!me);show('portal',false);show('profileSetup',false);show('pending',false);if(!me)return;const r=await db.from('member_profiles').select('*').eq('user_id',me.id).maybeSingle();if(r.error)return fail(r.error);profile=r.data;if(!profile){show('profileSetup',true);return}if(!profile.approved){show('pending',true);return}show('portal',true);await load();await setupBroadcast();await setupAdminTab();openViewFromUrl();await loadSmsPreferences();await setupPushUI();subscribe()}
+async function init(){if(!db){notice('Setup required: configure Supabase in config.js and run schema-phase3.sql.');show('signin',false);return}const {data:{user}}=await db.auth.getUser();me=user;show('signin',!me);show('portal',false);show('profileSetup',false);show('pending',false);if(!me)return;const r=await db.from('member_profiles').select('*').eq('user_id',me.id).maybeSingle();if(r.error)return fail(r.error);profile=r.data;if(!profile){show('profileSetup',true);return}if(!profile.approved){show('pending',true);return}show('portal',true);await load();await setupBroadcast();await setupAdminTab();await setupPlatform();openViewFromUrl();await loadSmsPreferences();await setupPushUI();subscribe()}
 let registrationMode=false;
 function setRegistrationMode(on){registrationMode=on;show('confirmPasswordGroup',on);$('confirmPassword').disabled=!on;$('confirmPassword').required=on;$('password').autocomplete=on?'new-password':'current-password';$('authSubmit').textContent=on?'Create account':'Sign in';$('register').textContent=on?'Back to sign in':'Create account';$('password').value='';$('confirmPassword').value='';notice('');updatePasswordMatch()}
 function updatePasswordMatch(){const status=$('passwordMatch');if(!registrationMode)return;const first=$('password').value,second=$('confirmPassword').value;status.textContent=!second?'Enter the same password twice.':first===second?'Passwords match.':'Passwords do not match.';status.classList.toggle('password-error',!!second&&first!==second)}
@@ -103,6 +103,44 @@ function setupInstall(){
 setupInstall();
 
 // ---- Admin tab: administrators and pastors get links to the admin pages (the pages still check who you are) ----
+// ---- Platform tab (platform owner only; the database enforces it) ----
+async function loadPlatform(){
+ const box=$('platformChurches');const r=await db.rpc('cc_platform_overview');
+ if(r.error){box.replaceChildren(item('Platform tools need the latest database update (platform-migration.sql).'));return}
+ const rows=r.data||[];const home=rows.find(x=>x.is_home),cur=rows.find(x=>x.is_current);
+ const out=[];
+ if(home&&cur&&home.id!==cur.id){const b=btn('Back to my church ('+home.name+')',()=>openChurch(home.id));b.classList.remove('secondary');out.push(b)}
+ for(const c of rows){
+  const row=document.createElement('div');row.className='list-item';const d=document.createElement('div');const s=document.createElement('strong');s.textContent=c.name+(c.is_current?'  ·  you are here':'');
+  const p=document.createElement('div');p.className='small muted';p.textContent=[c.slug,c.status||'no subscription',c.plan,c.members+' members',c.administrators+' admins',c.status==='trialing'&&c.trial_ends_at?'trial ends '+fmt(c.trial_ends_at):''].filter(Boolean).join(' · ');
+  d.append(s,p);
+  const act=document.createElement('div');act.className='actions';
+  const sel=document.createElement('select');sel.setAttribute('aria-label','Subscription status for '+c.name);for(const v of ['trialing','active','past_due','canceled']){const o=document.createElement('option');o.value=v;o.textContent=({trialing:'Trial',active:'Active',past_due:'Past due',canceled:'Canceled'})[v];sel.append(o)}sel.value=c.status||'trialing';
+  act.append(sel,btn('Save status',async()=>{const {error}=await db.rpc('cc_platform_set_subscription',{p_church:c.id,p_plan:c.plan||'trial',p_status:sel.value});$('pfStatus').textContent=error?error.message:'Status saved for '+c.name+'.';if(!error)await loadPlatform()}));
+  if(!c.is_current)act.append(btn('Open as administrator',()=>openChurch(c.id)));
+  row.append(d,act);out.push(row)}
+ box.replaceChildren(...(out.length?out:[item('No churches yet.')]));
+}
+async function openChurch(id){const {error}=await db.rpc('cc_platform_switch_church',{p_church:id});if(error)return $('pfStatus').textContent=error.message;location.href='connect.html?view=admin'}
+let slugEdited=false;
+$('pfSlug').oninput=()=>{slugEdited=true};
+$('pfName').oninput=()=>{if(!slugEdited)$('pfSlug').value=$('pfName').value.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,50)};
+$('platformForm').onsubmit=async ev=>{
+ ev.preventDefault();const st=$('pfStatus');st.textContent='Creating…';
+ const {data,error}=await db.rpc('cc_platform_create_church_for',{p_name:$('pfName').value.trim(),p_slug:$('pfSlug').value.trim(),p_admin_email:$('pfEmail').value.trim()});
+ if(error)return st.textContent=error.message;
+ st.textContent=data&&data.admin==='linked'?'Church created. That person is now its administrator.':'Church created. When '+$('pfEmail').value.trim()+' signs up with that email they become its administrator.';
+ $('platformForm').reset();slugEdited=false;await loadPlatform();
+};
+$('pfDemo').onclick=async()=>{
+ $('pfStatus').textContent='Creating the demo church…';const {error}=await db.rpc('cc_platform_create_demo_church');
+ $('pfStatus').textContent=error?error.message:'Demo church created. Use "Open as administrator" to look around.';if(!error)await loadPlatform();
+};
+async function setupPlatform(){
+ const {data}=await db.rpc('cc_is_platform_admin');
+ $('platformTab').classList.toggle('hidden',data!==true);
+ if(data===true)await loadPlatform();
+}
 async function setupAdminTab(){
  const {data}=await db.rpc('cc_is_admin');
  $('adminTab').classList.toggle('hidden',data!==true);

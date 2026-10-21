@@ -12,7 +12,8 @@ await db.exec(`
 create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;
 create schema auth; create schema storage;
 alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
-create table auth.users(id uuid primary key);
+create table auth.users(id uuid primary key, email text);
+create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims',true),'')::jsonb,'{}'::jsonb) $$;
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
 create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
 create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);
@@ -21,7 +22,7 @@ create function storage.filename(n text) returns text language sql as $$ select 
 alter table storage.objects enable row level security;
 grant usage on schema public,auth,storage to anon,authenticated; grant all on all tables in schema storage to authenticated;
 `);
-await db.exec(`insert into auth.users values ${Object.values(U).map(u => `('${u}')`).join(',')};`);
+await db.exec(`insert into auth.users(id,email) values ${Object.entries(U).map(([k, u]) => `('${u}','${k.toLowerCase()}@example.invalid')`).join(',')};`);
 
 // --- 1. tables from the export (primary keys are not in the export; these are the ones the app relies on)
 const PK = {member_profiles: 'user_id', church_admins: 'user_id', member_roles: 'user_id,role', ministry_members: 'ministry_id,user_id', conversation_members: 'conversation_id,user_id',
@@ -60,7 +61,7 @@ insert into public.cc_website_content(id,published,draft) values(1,'{"church":"A
 `);
 
 // --- 4. migrations, in the documented order; each must apply twice
-const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql', 'events-sync-migration.sql', 'photos-security-migration.sql'];
+const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql', 'events-sync-migration.sql', 'photos-security-migration.sql', 'platform-migration.sql'];
 let bad = 0;
 for (const f of order) {
   const sql = fs.readFileSync(repo + f, 'utf8');
@@ -69,8 +70,9 @@ for (const f of order) {
 if (bad) { console.log('\nmigration failure, stopping'); process.exit(1) }
 
 const run = async (role, uid, sql) => {
-  await db.exec(`reset role; select set_config('request.jwt.claim.sub','${uid || ''}',false); set role ${role};`);
-  try { const r = await db.query(sql); return 'ok ' + JSON.stringify(r.rows).slice(0, 160) } catch (e) { return 'ERR ' + e.message } finally { await db.exec('reset role') }
+  const em = uid ? ((await db.query(`select email from auth.users where id=$1`, [uid])).rows[0]?.email || '') : '';
+  await db.exec(`reset role; select set_config('request.jwt.claim.sub','${uid || ''}',false); select set_config('request.jwt.claims','${JSON.stringify({sub: uid || '', email: em})}',false); set role ${role};`);
+  try { const r = await db.query(sql); return 'ok ' + JSON.stringify(r.rows).slice(0, 6000) } catch (e) { return 'ERR ' + e.message } finally { await db.exec('reset role') }
 };
 const as = (u, sql) => run('authenticated', u, sql);
 let fails = 0; const T = (n, exp, got) => { const ok = got.startsWith(exp); if (!ok) fails++; console.log((ok ? 'PASS ' : 'FAIL ') + n + (ok ? '' : ' => ' + got.slice(0, 200))) };
@@ -236,7 +238,7 @@ T('clearing removes the feed and the status', 'ok [{"events_feed_url":null,"even
 
 // --- SECURITY FIX (members could approve themselves) + member photos
 const PH = u => `${defaultChurch}/${u}.jpg`;
-await db.exec(`insert into auth.users values('a4000000-0000-0000-0000-000000000004') on conflict do nothing`);
+await db.exec(`insert into auth.users(id,email) values('a4000000-0000-0000-0000-000000000004','a4@example.invalid') on conflict do nothing`);
 await db.exec(`insert into public.member_profiles(user_id,display_name,approved,directory_visible,church_id) values('a4000000-0000-0000-0000-000000000004','Unapproved A4',false,false,'${defaultChurch}') on conflict do nothing`);
 const A4 = 'a4000000-0000-0000-0000-000000000004';
 T('a member can NOT approve themselves', 'ERR permission denied', await as(A4, `update public.member_profiles set approved=true where user_id='${A4}' returning approved`));
@@ -285,11 +287,83 @@ T('gender must be female or male here too', 'ERR Gender', await as(U.A1, `select
 T('only administrators may use it', 'ERR Administrator access required', await as(U.A3, `select public.cc_set_directory_profile('${dirIdA}','male',null,false)`));
 T("an administrator of another church cannot change this church's staff-entered member", 'ERR Directory member not found', await as(U.B1, `select public.cc_set_directory_profile('${dirIdA}','male',null,false)`));
 
+
+// --- generic platform: church settings, invites, platform owner tools
+const mkUser = async (id, email) => db.exec(`insert into auth.users(id,email) values('${id}','${email}') on conflict do nothing`);
+const E1 = 'e1000000-0000-0000-0000-0000000000e1', N1 = 'f1000000-0000-0000-0000-0000000000a1', N2 = 'f2000000-0000-0000-0000-0000000000a2', N3 = 'f3000000-0000-0000-0000-0000000000a3', N4 = 'f4000000-0000-0000-0000-0000000000a4';
+await mkUser(E1, 'e1@example.invalid'); await mkUser(N1, 'newperson@example.invalid'); await mkUser(N2, 'pastor@example.invalid'); await mkUser(N3, 'stranger@example.invalid'); 
+// church B is active again for these tests
+await as(U.P, `select public.cc_platform_set_subscription('${B}','pro','active')`);
+// ---- church settings
+T('administrator renames the church and sets its website + time zone', 'ok', await as(U.A1, `select public.cc_update_church_settings('New Beginnings Outreach Center','https://newbeginningsoutreachctrcogic.org','America/New_York')`));
+T('it is stored for that church only', 'ok [{"name":"New Beginnings Outreach Center","website_url":"https://newbeginningsoutreachctrcogic.org"}]', await (async () => { const r = await db.query(`select name,website_url from public.churches where id='${defaultChurch}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T("another church's settings are untouched", 'ok [{"n":"0"}]', await (async () => { const r = await db.query(`select count(*)::text n from public.churches where id='${B}' and name='New Beginnings Outreach Center'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('a member cannot change church settings', 'ERR Administrator access required', await as(U.A3, `select public.cc_update_church_settings('Hacked','https://evil.example.org',null)`));
+T('a too-short name is refused', 'ERR The church name', await as(U.A1, `select public.cc_update_church_settings('x','https://example.org',null)`));
+T('an http address is refused', 'ERR', await as(U.A1, `select public.cc_update_church_settings('Good Name','http://example.org',null)`));
+T('an IP address is refused', 'ERR Use the public address', await as(U.A1, `select public.cc_update_church_settings('Good Name','https://10.0.0.1/x',null)`));
+T('a blank website is allowed (the built-in site is used)', 'ok', await as(U.A1, `select public.cc_update_church_settings('New Beginnings Outreach Center','',null)`));
+T('an unknown time zone is refused', 'ERR Unknown time zone', await as(U.A1, `select public.cc_update_church_settings('New Beginnings Outreach Center','https://newbeginningsoutreachctrcogic.org','Mars/Phobos')`));
+await as(U.A1, `select public.cc_update_church_settings('New Beginnings Outreach Center','https://newbeginningsoutreachctrcogic.org','America/New_York')`);
+T('anyone (even signed out) can read the church name and website for the sign-in page', 'ok [{"name":"New Beginnings Outreach Center","website_url":"https://newbeginningsoutreachctrcogic.org"}]', await run('anon', '', `select name,website_url from public.churches where id='${defaultChurch}'`));
+// ---- invites
+const asE = async (uid, sql) => as(uid, sql);
+T('administrator invites an email as a member', 'ok', await as(U.A1, `select public.cc_invite_member('NewPerson@Example.invalid','member')`));
+T('a second invite for the same email replaces the first', 'ok [{"n":"1"}]', await (async () => { await as(U.A1, `select public.cc_invite_member('newperson@example.invalid','member')`); const r = await db.query(`select count(*)::text n from public.cc_invites where email='newperson@example.invalid' and used_at is null`); return 'ok ' + JSON.stringify(r.rows) })());
+T('a bad email is refused', 'ERR Enter a valid email', await as(U.A1, `select public.cc_invite_member('not-an-email','member')`));
+T('an administrator cannot invite someone as administrator (only the platform owner)', 'ERR Choose Member or Pastor', await as(U.A1, `select public.cc_invite_member('x@example.invalid','admin')`));
+T('a member cannot invite', 'ERR Administrator access required', await as(U.A3, `select public.cc_invite_member('x@example.invalid','member')`));
+T('inviting someone who is already a member is refused', 'ERR That person is already a member', await as(U.A1, `select public.cc_invite_member('a3@example.invalid','member')`));
+T('administrators see their own invites', 'ok [{"email":"newperson@example.invalid"', await as(U.A1, `select email,role from public.cc_invites where used_at is null`));
+T("another church's administrator cannot see them", 'ok []', await as(U.B1, `select email from public.cc_invites`));
+T('members cannot see invites', 'ok []', await as(U.A3, `select email from public.cc_invites`));
+T('nobody can write invites directly', 'ERR permission denied', await as(U.A1, `insert into public.cc_invites(church_id,email,role) values('${defaultChurch}','x@example.invalid','admin')`));
+await as(U.A1, `select public.cc_invite_member('pastor@example.invalid','pastor')`);
+// sign-up with an invite (two churches exist, so the invite decides the church)
+T('an invited person signs up WITHOUT choosing a church: placed in the invited church and approved', 'ok [{"approved":true,"in_a":true}]', await (async () => { await as(N1, `select public.create_my_profile('New One')`); const r = await db.query(`select approved,(church_id='${defaultChurch}') in_a from public.member_profiles where user_id='${N1}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('the invite is marked used', 'ok [{"n":"0"}]', await (async () => { const r = await db.query(`select count(*)::text n from public.cc_invites where email='newperson@example.invalid' and used_at is null`); return 'ok ' + JSON.stringify(r.rows) })());
+T('an invited member is NOT an administrator', 'ok [{"n":"0"}]', await (async () => { const r = await db.query(`select count(*)::text n from public.church_admins where user_id='${N1}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('an invited pastor is approved, has the pastor role and administrator access', 'ok [{"approved":true,"pastor":1,"admin":1}]', await (async () => { await as(N2, `select public.create_my_profile('Pastor Pat')`); const r = await db.query(`select (select approved from public.member_profiles where user_id='${N2}') approved,(select count(*)::int from public.member_roles where user_id='${N2}' and role='pastor') pastor,(select count(*)::int from public.church_admins where user_id='${N2}') admin`); return 'ok ' + JSON.stringify(r.rows[0]).replace(/^/, '[').replace(/$/, ']') })());
+T('the invited pastor really can use administrator functions', 'ok [{"cc_is_admin":true}]', await as(N2, `select public.cc_is_admin()`));
+T('someone WITHOUT an invite must choose a church when there are several', 'ERR Choose a church', await as(N3, `select public.create_my_profile('Stranger')`));
+T('...and is NOT approved when they do', 'ok [{"approved":false}]', await (async () => { await as(N3, `select public.create_my_profile('Stranger','${defaultChurch}')`); const r = await db.query(`select approved from public.member_profiles where user_id='${N3}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('an invite for church A does not approve someone who joins church B', 'ok [{"approved":false}]', await (async () => { await as(U.A1, `select public.cc_invite_member('stranger2@example.invalid','member')`); await mkUser('f5000000-0000-0000-0000-0000000000a5', 'stranger2@example.invalid'); await as('f5000000-0000-0000-0000-0000000000a5', `select public.create_my_profile('Stranger Two','${B}')`); const r = await db.query(`select approved from public.member_profiles where user_id='f5000000-0000-0000-0000-0000000000a5'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('an administrator can cancel a pending invite', 'ok [{"n":"0"}]', await (async () => { const id = (await db.query(`select id from public.cc_invites where email='stranger2@example.invalid'`)).rows[0].id; await as(U.A1, `select public.cc_cancel_invite('${id}')`); const r = await db.query(`select count(*)::text n from public.cc_invites where id='${id}'`); return 'ok ' + JSON.stringify(r.rows) })());
+// ---- platform owner
+await db.exec(`insert into public.member_profiles(user_id,display_name,approved,church_id) values('${U.P}','Platform Owner',true,'${defaultChurch}') on conflict do nothing`);
+T('the platform owner sees every church with counts', 'ok', await (async () => { const r = JSON.parse((await as(U.P, `select name,members,administrators,is_current,is_home from public.cc_platform_overview()`)).slice(3)); return r.length >= 2 && r.some(x => x.is_current === true) ? 'ok ' + r.length : 'bad ' + JSON.stringify(r) })());
+T('nobody else can see the church list', 'ERR Platform administrator access required', await as(U.A1, `select * from public.cc_platform_overview()`));
+T('creating a church for an email that already belongs to a church is refused', 'ERR That email already belongs', await as(U.P, `select public.cc_platform_create_church_for('Nope Church','nope','a3@example.invalid')`));
+T('creating a church for an existing person with no church links them as its administrator', 'ok', await as(U.P, `select public.cc_platform_create_church_for('Hope Chapel','hope','e1@example.invalid')`));
+T('they are approved and administrator of the NEW church only', 'ok [{"approved":true,"is_admin":1,"named":"Hope Chapel"}]', await (async () => { const r = await db.query(`select p.approved,(select count(*)::int from public.church_admins a where a.user_id='${E1}') is_admin,(select c.name from public.churches c where c.id=p.church_id) named from public.member_profiles p where p.user_id='${E1}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('the new church has a 30-day trial and its settings rows', 'ok [{"status":"trialing","settings":1}]', await (async () => { const r = await db.query(`select s.status,(select count(*)::int from public.church_settings x where x.church_id=c.id) settings from public.churches c join public.church_subscriptions s on s.church_id=c.id where c.slug='hope'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('creating a church for an email nobody has used yet sends an invite as administrator', 'ok [{"admin":"invited"}]', await (async () => { const r = await as(U.P, `select public.cc_platform_create_church_for('Faith Center','faith','faith.admin@example.invalid')`); return r.includes('"invited"') ? 'ok [{"admin":"invited"}]' : r })());
+T('...and that person becomes its administrator when they sign up', 'ok [{"approved":true,"admin":1,"named":"Faith Center"}]', await (async () => { await mkUser(N4, 'faith.admin@example.invalid'); await as(N4, `select public.create_my_profile('Faith Admin')`); const r = await db.query(`select p.approved,(select count(*)::int from public.church_admins a where a.user_id='${N4}') admin,(select c.name from public.churches c where c.id=p.church_id) named from public.member_profiles p where p.user_id='${N4}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('a taken short name is refused', 'ERR That short name is already taken', await as(U.P, `select public.cc_platform_create_church_for('Another','hope','z@example.invalid')`));
+T('a bad short name is refused', 'ERR The short name may use only letters', await as(U.P, `select public.cc_platform_create_church_for('Another','Bad Name!','z@example.invalid')`));
+T('only the platform owner can create churches', 'ERR Platform administrator access required', await as(U.A1, `select public.cc_platform_create_church_for('Evil','evil','z@example.invalid')`));
+T('the internal church builder is not callable by anyone signed in', 'ERR permission denied', await as(U.P, `select public.cc_platform_new_church('X','xx','active','x')`));
+// demo church
+T('the platform owner creates a demo church', 'ok', await as(U.P, `select public.cc_platform_create_demo_church()`));
+const demo = (await db.query(`select id from public.churches where slug like 'demo-%' order by created_at desc limit 1`)).rows[0].id;
+T('it has sample ministries, events, announcements and staff-entered members', 'ok [{"m":5,"e":6,"a":3,"d":6,"status":"active"}]', await (async () => { const r = await db.query(`select (select count(*)::int from public.ministries where church_id='${demo}') m,(select count(*)::int from public.church_events where church_id='${demo}') e,(select count(*)::int from public.church_announcements where church_id='${demo}') a,(select count(*)::int from public.cc_directory_members where church_id='${demo}') d,(select status from public.church_subscriptions where church_id='${demo}') status`); return 'ok ' + JSON.stringify(r.rows) })());
+T('only the platform owner can create a demo', 'ERR Platform administrator access required', await as(U.A1, `select public.cc_platform_create_demo_church()`));
+// open as administrator, and back
+T('only the platform owner can open another church as administrator', 'ERR Platform administrator access required', await as(U.A1, `select public.cc_platform_switch_church('${demo}')`));
+T('the platform owner opens the demo church as its administrator', 'ok', await as(U.P, `select public.cc_platform_switch_church('${demo}')`));
+T('they now see the DEMO church\'s data as an administrator', 'ok [{"n":5}]', await (async () => { const r = JSON.parse((await as(U.P, `select count(*)::int n from public.ministries`)).slice(3)); return 'ok ' + JSON.stringify(r) })());
+T('...and none of the first church\'s private data', 'ok [{"n":0}]', await as(U.P, `select count(*)::int n from public.messages`));
+T('the home church is remembered', 'ok [{"is_home":true}]', await (async () => { const r = JSON.parse((await as(U.P, `select is_home from public.cc_platform_overview() where id='${defaultChurch}'`)).slice(3)); return 'ok ' + JSON.stringify(r) })());
+T('they can go back to their own church', 'ok', await as(U.P, `select public.cc_platform_switch_church('${defaultChurch}')`));
+T('and are administrator of their own church again (and of no other)', 'ok [{"in_default":1,"elsewhere":0}]', await (async () => { const r = await db.query(`select count(*) filter (where church_id='${defaultChurch}')::int in_default,count(*) filter (where church_id<>'${defaultChurch}')::int elsewhere from public.church_admins where user_id='${U.P}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('every platform action was logged', 'ok [{"actions":true}]', await (async () => { const r = await db.query(`select (count(*) >= 5) actions from public.cc_platform_audit`); return 'ok ' + JSON.stringify(r.rows) })());
+T('nobody can read the platform log', 'ERR permission denied', await as(U.P, `select * from public.cc_platform_audit`));
+
 // --- rollback: restores the single-church shape and the original functions
 await db.exec(`reset role`);
 let refused = 'no error'; try { await db.exec(fs.readFileSync(repo + 'multichurch-rollback.sql', 'utf8')) } catch (e) { refused = 'ERR ' + e.message }
 T('rollback refuses while a second church exists', 'ERR More than one church', refused);
-await db.exec(`delete from public.churches where id='${B}'`); // cascades away church B's rows
+await db.exec(`delete from public.churches where slug<>'default'`); // cascades away every extra church's rows
 await db.exec(fs.readFileSync(repo + 'multichurch-rollback.sql', 'utf8'));
 await db.exec(fs.readFileSync(repo + 'multichurch-rollback.sql', 'utf8')); // re-runnable
 T('rollback removes church_id', 'ok [{"n":"0"}]', await (async () => { const r = await db.query(`select count(*)::text n from information_schema.columns where table_schema='public' and column_name='church_id'`); return 'ok ' + JSON.stringify(r.rows) })());
