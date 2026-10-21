@@ -42,3 +42,10 @@ body{background:linear-gradient(145deg,#f9f8ff,#f2f6fa 55%,#fff);font-family:Int
 .cc-admin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.cc-stat{margin:0}.cc-stat span{display:block;color:var(--muted);font-size:14px}.cc-stat strong{font-size:36px;display:block;margin-top:10px}.cc-admin-tile{display:flex;flex-direction:column;gap:9px;border:1px solid #e5e1f0;background:#faf9ff;border-radius:14px;padding:20px;min-height:110px}.cc-admin-tile:hover,.cc-admin-tile:focus-visible{outline:2px solid #5542a8}.cc-admin-tile span{font-size:14px;color:var(--muted)}#groupWorkspace h3{margin-top:28px}#selectedGroupTitle{margin-top:0}
 
 .sms-composer,.sms-preferences{margin:14px 0;padding:16px;background:#f3f6fb;border:1px solid #dbe4f0;border-radius:14px}.sms-composer label,.sms-preferences label{margin:10px 0}.sms-composer .checkline,.sms-preferences .checkline{display:flex;gap:10px;align-items:center}.sms-composer input[type=checkbox],.sms-preferences input[type=checkbox]{width:auto}
+
+/* member photos */
+.avatar{display:inline-block;width:var(--avatar,44px);height:var(--avatar,44px);border-radius:50%;overflow:hidden;flex:none;background:#e9e4f5}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.person{display:flex;align-items:center;gap:12px;min-width:0}
+.photo-row{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+.file-btn{cursor:pointer;display:inline-block}
