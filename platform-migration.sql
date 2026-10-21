@@ -8,12 +8,6 @@ alter table public.churches add column if not exists website_url text;
 alter table public.churches drop constraint if exists churches_website_url_ck;
 alter table public.churches add constraint churches_website_url_ck check (website_url is null or website_url ~* '^https://[a-z0-9.-]+(:[0-9]+)?(/[^\s]*)?$');
 
--- Move the first church in (it was created as "Your Church" with no settings). Only fills what is still empty.
-update public.churches set name = 'New Beginnings Outreach Center'
- where id = (select id from public.churches order by created_at limit 1) and name = 'Your Church';
-update public.churches set website_url = 'https://newbeginningsoutreachctrcogic.org'
- where website_url is null and name = 'New Beginnings Outreach Center';
-
 create or replace function public.cc_update_church_settings(p_name text, p_website_url text, p_timezone text default null) returns void
 language plpgsql security definer set search_path='' as $$
 declare v_url text := nullif(trim(coalesce(p_website_url,'')),''); v_host text;

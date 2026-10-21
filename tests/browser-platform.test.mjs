@@ -67,7 +67,8 @@ const vis = (tab, sel) => tab.evaluate(s => { const e = document.querySelector(s
 
 // ---------------- the church's own name and website (no church is built into the code) ----------------
 const cfg = fs.readFileSync(path.join(root, 'config.js'), 'utf8');
-T('config.js is generic: no church name or website in the code', /name: 'Church Connect'/.test(cfg) && /existingWebsiteUrl: ''/.test(cfg) && !/newbeginnings/i.test(cfg));
+T('config.js is generic: the default name is the generic platform name and no church website is built in', /name: 'Church Connect'/.test(cfg) && /existingWebsiteUrl: ''/.test(cfg) && !/existingWebsiteUrl: 'https/.test(cfg));
+T('addresses map to environments (NBOC has its own; unknown addresses use the demo/default one)', /HOSTS\[location\.hostname\]/.test(cfg) && /DEMO\.supabaseUrl \? DEMO : NBOC/.test(cfg));
 { const {tab, errors} = await open('connect.html', {signedOut: true, churches: [NBOC]});
   T('signed out, one church on this address: its name shows in the header', await text(tab, '.brand [data-church]') === 'New Beginnings Outreach Center', await text(tab, '.brand [data-church]'));
   T('...and "Public website" opens that church\'s website', await tab.evaluate(() => document.querySelector('a[data-church-site]').href) === 'https://newbeginningsoutreachctrcogic.org/');
