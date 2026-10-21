@@ -39,7 +39,9 @@ lines.append('')
 # 2. constraints: keys and checks first, foreign keys last (they need the other tables)
 kinds = {'p': 0, 'u': 0, 'c': 1, 'f': 2}
 for c in sorted(d['constraints'], key=lambda c: kinds.get(c['type'], 3)):
-    lines.append(f'alter table {table_ref(c["table"])} add constraint {Q(c["name"])} {c["def"]};')
+    tr = table_ref(c["table"])
+    lines.append(f"do $cc$ begin if not exists (select 1 from pg_constraint where conname = '{c['name']}' and conrelid = '{tr}'::regclass) then "
+                 f'alter table {tr} add constraint {Q(c["name"])} {c["def"]}; end if; end $cc$;')
 lines.append('')
 
 # 3. indexes that are not already created by a constraint

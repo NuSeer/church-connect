@@ -27,6 +27,7 @@ for (const f of ['01-structure.sql', '02-features-and-seed.sql']) {
   try { await db.exec(fs.readFileSync(`${folder}/${f}`, 'utf8')); T(`${f} applies cleanly to an empty project`, true) }
   catch (e) { T(`${f} applies cleanly to an empty project`, false, e.message); console.log('\nSTOPPED'); process.exit(1) }
 }
+try { await db.exec(fs.readFileSync(`${folder}/01-structure.sql`, 'utf8')); T('part 1 can be run again safely', true) } catch (e) { T('part 1 can be run again safely', false, e.message) }
 try { await db.exec(fs.readFileSync(`${folder}/02-features-and-seed.sql`, 'utf8')); T('part 2 can be run again safely', true) } catch (e) { T('part 2 can be run again safely', false, e.message) }
 
 // ---- same shape as the exported project (plus only the newest features)
