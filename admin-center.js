@@ -24,4 +24,21 @@ $('settingsForm').onsubmit=async ev=>{
  document.querySelectorAll('[data-church]').forEach(el=>el.textContent=$('settingsName').value.trim());
  $('settingsStatus').textContent='Saved. The new name shows across the app.';
 };
-await init();
+// ---- Church colors (applied live as you pick, saved with the button) ----
+import {applyColors} from './brand.js';
+const STD={p:'#4933a2',a:'#e0ae66'};
+async function loadColors(){
+ const id=(await db.rpc('cc_my_church_id')).data;if(!id)return;
+ const r=await db.from('churches').select('brand_primary,brand_accent').eq('id',id).maybeSingle();
+ if(r.error||!r.data){$('colorsStatus').textContent='Colors need the latest database update (colors-migration.sql).';return}
+ $('colorPrimary').value=r.data.brand_primary||STD.p;$('colorAccent').value=r.data.brand_accent||STD.a;
+}
+$('colorPrimary').oninput=$('colorAccent').oninput=()=>applyColors($('colorPrimary').value,$('colorAccent').value);
+async function saveColors(p,a,msg){
+ const {error}=await db.rpc('cc_update_church_colors',{p_primary:p,p_accent:a});
+ $('colorsStatus').textContent=error?error.message:msg;
+ return !error;
+}
+$('colorsForm').onsubmit=async ev=>{ev.preventDefault();await saveColors($('colorPrimary').value,$('colorAccent').value,'Saved. Your church colors now show across the app.')};
+$('colorsReset').onclick=async()=>{if(await saveColors('','','Back to the standard colors. Reload the page to see them.')){$('colorPrimary').value=STD.p;$('colorAccent').value=STD.a;applyColors(STD.p,STD.a)}};
+await init();await loadColors().catch(()=>{});

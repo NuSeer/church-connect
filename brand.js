@@ -11,8 +11,9 @@ export async function loadBrand() {
       let id = cfg.churchId || null;
       if (!id) { const {data: {session}} = await db.auth.getSession(); if (session) id = (await db.rpc('cc_my_church_id')).data || null }
       const pick = async cols => id ? await db.from('churches').select(cols).eq('id', id).maybeSingle() : await db.from('churches').select(cols).order('created_at').limit(2);
-      let r = await pick('id,name,website_url');
-      if (r.error) r = await pick('id,name'); // database not updated yet: name only
+      let r = await pick('id,name,website_url,brand_primary,brand_accent');
+      if (r.error) r = await pick('id,name,website_url'); // colors not set up in the database yet
+      if (r.error) r = await pick('id,name'); // older database: name only
       church = id ? r.data : (Array.isArray(r.data) && r.data.length === 1 ? r.data[0] : null);
     } catch (e) { /* fall back to config.js */ }
   }
@@ -20,6 +21,19 @@ export async function loadBrand() {
   document.querySelectorAll('[data-church]').forEach(el => { el.textContent = name });
   const site = String((church && church.website_url) || cfg.existingWebsiteUrl || '').trim();
   if (/^https:\/\//.test(site)) document.querySelectorAll('a[data-church-site]').forEach(a => { a.href = site; a.target = '_blank'; a.rel = 'noopener' });
+  applyColors(church && church.brand_primary, church && church.brand_accent);
   window.CHURCH_BRAND = {name, website: site || null, churchId: church && church.id || null};
   return window.CHURCH_BRAND;
+}
+
+// A church's own colors replace the standard purple and gold. Anything that is not a plain #rrggbb value is ignored (standard look).
+const HEX = /^#[0-9a-f]{6}$/i;
+export function applyColors(primary, accent) {
+  const root = document.documentElement.style;
+  if (HEX.test(primary || '')) {
+    root.setProperty('--church-primary', primary); root.setProperty('--cc-purple', primary);
+    root.setProperty('--church-secondary', `color-mix(in srgb, ${primary}, #ffffff 25%)`);
+    document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', primary));
+  }
+  if (HEX.test(accent || '')) { root.setProperty('--church-accent', accent); root.setProperty('--gold', accent) }
 }
