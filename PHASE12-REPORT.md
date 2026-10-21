@@ -45,3 +45,10 @@ See `EVENTS-AND-ALERTS-SETUP.md`.
 - `tests/edge-functions.test.mjs` runs the real function code: push (broadcast, sign-up/ministry alerts, church separation, retry de-dup, expired phones) and website sync using the live site's real feed (270 events all mapped; time zones incl. daylight saving; HTML stripped; empty/broken/redirected/internal feeds never wipe or fetch anything).
 - `tests/browser-events-feed.test.mjs` (mock admin sign-in) and extra checks in `tests/replica-multichurch.test.mjs`.
 - Not tested: the real website feed through the real Supabase Edge runtime, phones, and the Cron job.
+
+## Member photos + SECURITY FIX (2026-10-20/21)
+- **Security fix:** members could approve themselves (table-wide update right on `member_profiles`). `photos-security-migration.sql` limits members to name/bio/directory settings/contact email/gender/photo fields. Tested on the rebuilt live schema.
+- **Photos:** private storage bucket `member-photos`; a member's photo is visible to other approved members of the same church only if they turn sharing on (default off); administrators can always see/remove; staff-entered members (no account) get photos added by administrators, visible to administrators only. Generic woman / man / neutral pictures (`avatar-*.svg`) chosen by a Female/Male box; pictures are centre-cropped and shrunk in the browser before upload.
+- Tests: 40+ database checks in `tests/replica-multichurch.test.mjs`, `tests/browser-photos.test.mjs` (profile upload/share/remove, directory privacy, administrator Membership screens, staff-entered photo flow).
+- **Deploy order:** run the SQL first, then publish the screens (the screens read the new columns).
+- Not built: photos in message lists/chat headers, ministry galleries, event flyers.

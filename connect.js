@@ -4,6 +4,7 @@ if(ccModules && !ccModules.messaging && !ccModules.membership && !ccModules.mini
   throw new Error('Member modules disabled in this deployment');
 }
 import {db,escapeHTML as e,fmt} from './data.js';
+import {avatarEl,signedUrls,uploadPhoto,removePhotoFile} from './avatar.js';
 const $=id=>document.getElementById(id);const show=(id,on)=>$(id).classList.toggle('hidden',!on);
 let me=null,profile=null,activeConversation=null,conversations=[],ministries=[],directory=[];let allMinistries=[];let approvedMinistryIds=new Set();let channel=null;let unreadCounts=new Map();
 document.querySelectorAll('[data-church]').forEach(el=>el.textContent=window.CHURCH_CONFIG.name||'Your Church');
@@ -55,6 +56,37 @@ async function broadcastSmsButtons(title,body){
 // Open a tab named in the address (used by notification taps, e.g. connect.html?view=updates).
 function openViewFromUrl(){const v=new URLSearchParams(location.search).get('view');if(v)document.querySelector(`[data-view="${CSS.escape(v)}"]:not(.hidden)`)?.click()}
 
+
+// ---- My photo (private; shown to other members only if you turn sharing on) ----
+let photoUrls=new Map();
+function myAvatarNow(gender){return avatarEl({gender:gender||null,photo_path:profile.photo_path},photoUrls,96,true)}
+function renderMyPhoto(){
+ $('myAvatar').replaceChildren(myAvatarNow(profile.gender));
+ $('gender').value=profile.gender||'';
+ $('photoVisible').checked=!!profile.photo_visible&&!!profile.photo_path;$('photoVisible').disabled=!profile.photo_path;
+ $('photoRemove').classList.toggle('hidden',!profile.photo_path);
+}
+$('gender').onchange=()=>$('myAvatar').replaceChildren(myAvatarNow($('gender').value));
+$('photoFile').onchange=async ev=>{
+ const file=ev.target.files[0];ev.target.value='';if(!file)return;const st=$('photoStatus');st.textContent='Preparing your photo…';
+ try{
+  const path=`${profile.church_id}/${me.id}.jpg`;await uploadPhoto(db,path,file);
+  const {error}=await db.from('member_profiles').update({photo_path:path}).eq('user_id',me.id);if(error)throw error;
+  profile.photo_path=path;for(const [k,v] of await signedUrls(db,[path]))photoUrls.set(k,v);
+  renderMyPhoto();st.textContent='Photo saved. It is private until you tick "Show my photo to other church members".';
+ }catch(err){st.textContent=err.message||'Could not save the photo.'}
+};
+$('photoRemove').onclick=async()=>{
+ if(!confirm('Remove your photo?'))return;
+ try{await removePhotoFile(db,profile.photo_path).catch(()=>{});const {error}=await db.from('member_profiles').update({photo_path:null,photo_visible:false}).eq('user_id',me.id);if(error)throw error;
+  profile.photo_path=null;profile.photo_visible=false;renderMyPhoto();$('photoStatus').textContent='Your photo was removed.'}catch(err){$('photoStatus').textContent=err.message||'Could not remove the photo.'}
+};
+$('photoVisible').onchange=async()=>{
+ const v=$('photoVisible').checked;const {error}=await db.from('member_profiles').update({photo_visible:v}).eq('user_id',me.id);
+ if(error){$('photoVisible').checked=!v;return $('photoStatus').textContent=error.message}
+ profile.photo_visible=v;$('photoStatus').textContent=v?'Other church members can now see your photo.':'Your photo is hidden from other members.';
+};
+
 // ---- Install as an app (so members open Church Connect straight to sign in) ----
 function setupInstall(){
  const box=$('installHint');if(!box)return;
@@ -75,10 +107,10 @@ async function setupAdminTab(){
  const {data}=await db.rpc('cc_is_admin');
  $('adminTab').classList.toggle('hidden',data!==true);
 }
-async function load(){notice('');const [dir,mm,up]=await Promise.all([db.from('member_profiles').select('user_id,display_name,bio,directory_visible,directory_contact_visible,contact_email').eq('directory_visible',true).eq('approved',true),db.from('ministry_members').select('ministry_id,is_leader,ministries(id,name,description)').eq('user_id',me.id),db.from('member_updates').select('title,body,created_at,ministry_id').order('created_at',{ascending:false}).limit(50)]);for(const x of [dir,mm,up])if(x.error)return fail(x.error);directory=dir.data;ministries=mm.data;approvedMinistryIds=new Set(ministries.map(m=>String(m.ministry_id)));await loadProfileExtras();renderDirectory();renderMinistries();$('updateList').replaceChildren(...(up.data.length?up.data.map(x=>item(`${x.title} — ${x.body} · ${fmt(x.created_at)}`)):[item('No updates yet.')]));$('displayName').value=profile.display_name;$('bio').value=profile.bio||'';$('directoryVisible').checked=profile.directory_visible;$('contactVisible').checked=profile.directory_contact_visible;$('contactEmail').value=profile.contact_email||'';await loadChats();renderComposeMinistries();await loadGiving()}
-function renderDirectory(){const q=$('directorySearch').value.trim().toLowerCase();const list=q.length>=2?directory.filter(x=>x.display_name.toLowerCase().includes(q)):[];$('directoryList').replaceChildren(...(list.length?list.map(x=>{const row=document.createElement('div');row.className='list-item';const info=document.createElement('div');const strong=document.createElement('strong');strong.textContent=x.display_name;info.append(strong);if(x.bio){const d=document.createElement('p');d.textContent=x.bio;info.append(d)}if(x.directory_contact_visible&&x.contact_email){const d=document.createElement('p');d.textContent=x.contact_email;info.append(d)}row.append(info);if(x.user_id!==me.id)row.append(btn('Message',()=>startChat(x.user_id,x.display_name)));return row}):[item(q.length<2?'Enter at least two letters to search.':'No matching opt-in members.')]))}
+async function load(){notice('');const [dir,mm,up]=await Promise.all([db.from('member_profiles').select('user_id,display_name,bio,directory_visible,directory_contact_visible,contact_email,gender,photo_path,photo_visible').eq('directory_visible',true).eq('approved',true),db.from('ministry_members').select('ministry_id,is_leader,ministries(id,name,description)').eq('user_id',me.id),db.from('member_updates').select('title,body,created_at,ministry_id').order('created_at',{ascending:false}).limit(50)]);for(const x of [dir,mm,up])if(x.error)return fail(x.error);directory=dir.data;photoUrls=await signedUrls(db,[profile?.photo_path,...directory.filter(x=>x.photo_visible).map(x=>x.photo_path)]);ministries=mm.data;approvedMinistryIds=new Set(ministries.map(m=>String(m.ministry_id)));await loadProfileExtras();renderDirectory();renderMinistries();$('updateList').replaceChildren(...(up.data.length?up.data.map(x=>item(`${x.title} — ${x.body} · ${fmt(x.created_at)}`)):[item('No updates yet.')]));$('displayName').value=profile.display_name;$('bio').value=profile.bio||'';$('directoryVisible').checked=profile.directory_visible;$('contactVisible').checked=profile.directory_contact_visible;$('contactEmail').value=profile.contact_email||'';renderMyPhoto();await loadChats();renderComposeMinistries();await loadGiving()}
+function renderDirectory(){const q=$('directorySearch').value.trim().toLowerCase();const list=q.length>=2?directory.filter(x=>x.display_name.toLowerCase().includes(q)):[];$('directoryList').replaceChildren(...(list.length?list.map(x=>{const row=document.createElement('div');row.className='list-item';const info=document.createElement('div');const strong=document.createElement('strong');strong.textContent=x.display_name;info.append(strong);if(x.bio){const d=document.createElement('p');d.textContent=x.bio;info.append(d)}if(x.directory_contact_visible&&x.contact_email){const d=document.createElement('p');d.textContent=x.contact_email;info.append(d)}const left=document.createElement('div');left.className='person';left.append(avatarEl(x,photoUrls,48,x.photo_visible),info);row.append(left);if(x.user_id!==me.id)row.append(btn('Message',()=>startChat(x.user_id,x.display_name)));return row}):[item(q.length<2?'Enter at least two letters to search.':'No matching opt-in members.')]))}
 $('directorySearch').oninput=renderDirectory;
-$('profileForm').onsubmit=async ev=>{ev.preventDefault();const payload={display_name:$('displayName').value.trim(),bio:$('bio').value.trim(),directory_visible:$('directoryVisible').checked,directory_contact_visible:$('contactVisible').checked,contact_email:$('contactEmail').value.trim()||null};const {error}=await db.from('member_profiles').update(payload).eq('user_id',me.id);if(error)return fail(error);profile={...profile,...payload};try{await saveProfileExtras()}catch(err){return fail(err)}notice('Profile and privacy settings saved.');await load()};
+$('profileForm').onsubmit=async ev=>{ev.preventDefault();const payload={display_name:$('displayName').value.trim(),bio:$('bio').value.trim(),directory_visible:$('directoryVisible').checked,directory_contact_visible:$('contactVisible').checked,contact_email:$('contactEmail').value.trim()||null,gender:$('gender').value||null};const {error}=await db.from('member_profiles').update(payload).eq('user_id',me.id);if(error)return fail(error);profile={...profile,...payload};try{await saveProfileExtras()}catch(err){return fail(err)}notice('Profile and privacy settings saved.');await load()};
 async function startChat(userId,name){const {data,error}=await db.rpc('start_direct_chat',{recipient:userId});if(error)return fail(error);document.querySelector('[data-view="messages"]').click();await loadChats();await openChat(data,name)}
 async function loadChats(){const r=await db.from('conversation_members').select('conversation_id').eq('user_id',me.id);if(r.error)return fail(r.error);const ids=r.data.map(x=>x.conversation_id);const mIds=ministries.map(x=>x.ministry_id);const [direct,groups]=await Promise.all([ids.length?db.from('conversations').select('id,kind,ministry_id').in('id',ids):{data:[]},mIds.length?db.from('conversations').select('id,kind,ministry_id').eq('kind','ministry').in('ministry_id',mIds):{data:[]}]);if(direct.error||groups.error)return fail(direct.error||groups.error);conversations=[...new Map([...direct.data,...groups.data].map(x=>[x.id,x])).values()];renderConversationList();await refreshUnread()}
 function ministryColor(id){const saved=ministries.find(x=>String(x.ministry_id)===String(id))?.ministries?.color;if(saved)return saved;const colors=['#8956ce','#178f85','#d98625','#286ac1','#c45378'];let n=0;for(const c of String(id||''))n=(n*31+c.charCodeAt(0))>>>0;return colors[n%colors.length]}
