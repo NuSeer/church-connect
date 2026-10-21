@@ -36,7 +36,7 @@ async function run(name, syncReply, fn, churchRow) {
     else if (u.pathname.endsWith('/rpc/cc_my_church_id')) body = 'church-1';
     else if (u.pathname.endsWith('/rest/v1/churches')) body = [churchRow || {events_feed_url: 'https://newbeginningsoutreachctrcogic.org/api/events', events_timezone: 'America/Chicago', events_synced_at: '2026-10-20T12:00:00Z', events_sync_status: 'Synced 270 events'}];
     else if (u.pathname.endsWith('/rpc/cc_set_events_feed')) { const b = JSON.parse(ev.request.postData || '{}'); calls.push({fn: 'set', body: b}); if (/^http:/.test(b.p_url || '')) { code = 400; body = {message: 'Use a full https:// web address'} } else body = null }
-    else if (u.pathname.endsWith('/functions/v1/sync-website-events')) { calls.push({fn: 'sync', auth: ev.request.headers['Authorization'] || ev.request.headers['authorization']}); code = syncReply.code; body = syncReply.body }
+    else if (u.pathname.endsWith('/functions/v1/sync-website-events')) { calls.push({fn: 'sync', auth: ev.request.headers['Authorization'] || ev.request.headers['authorization'], body: (() => { try { return JSON.parse(ev.request.postData || '{}') } catch { return {} } })()}); code = syncReply.code; body = syncReply.body }
     await cdp.send('Fetch.fulfillRequest', {requestId: ev.requestId, responseCode: code, responseHeaders: [{name: 'content-type', value: 'application/json'}, {name: 'access-control-allow-origin', value: '*'}, {name: 'access-control-allow-headers', value: '*'}, {name: 'access-control-allow-methods', value: '*'}], body: Buffer.from(m === 'OPTIONS' ? '' : JSON.stringify(body)).toString('base64')}).catch(() => {});
   });
   await tab.goto(`http://localhost:${port}/admin.html`, {waitUntil: 'load', timeout: 45000});
@@ -73,6 +73,21 @@ await run('the sync function reports a problem', {code: 429, body: {error: 'Sync
   const msg = await tab.evaluate(() => document.getElementById('feedStatus').textContent);
   T('the server\'s plain-language message is shown', /Synced moments ago/.test(msg), msg);
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 200));
+});
+await run('find my events automatically: found', {code: 200, body: {ok: true, found: true, feed: 'https://yourchurch.org/cal/feed.ics', type: 'ics', synced: 12}}, async (tab, calls, errors) => {
+  T('the panel has a "Find my events automatically" button', await tab.evaluate(() => /Find my events automatically/.test(document.getElementById('feedDetect')?.textContent || '')));
+  await tab.click('#feedDetect'); await new Promise(r => setTimeout(r, 1500));
+  const det = calls.find(c => c.fn === 'sync' && c.body.detect === true);
+  T('it asks the function to look for the events list, with the administrator login', det && /^Bearer /.test(det.auth || ''), JSON.stringify(det));
+  const msg = await tab.evaluate(() => document.getElementById('feedStatus').textContent);
+  T('it says what it found and how many events it copied', /Found it and copied 12 events from https:\/\/yourchurch\.org\/cal\/feed\.ics/.test(msg), msg);
+  T('the button is usable again', await tab.evaluate(() => !document.getElementById('feedDetect').disabled));
+  T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 200));
+});
+await run('find my events automatically: nothing found', {code: 200, body: {ok: false, found: false, error: 'We could not find an events list on your website. Add events by hand.'}}, async (tab) => {
+  await tab.click('#feedDetect'); await new Promise(r => setTimeout(r, 1500));
+  const msg = await tab.evaluate(() => document.getElementById('feedStatus').textContent);
+  T('when nothing is found the plain-language reason is shown', /could not find an events list/.test(msg), msg);
 });
 await run('a rejected address shows the reason', {code: 200, body: {ok: true}}, async (tab, calls) => {
   await tab.$eval('#feedUrl', el => { el.value = 'http://example.org/e' });
