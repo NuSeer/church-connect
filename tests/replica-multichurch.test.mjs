@@ -17,6 +17,7 @@ create function auth.uid() returns uuid language sql stable as $$ select nullif(
 create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
 create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);
 create function storage.foldername(n text) returns text[] language sql as $$ select string_to_array(n,'/') $$;
+create function storage.filename(n text) returns text language sql as $$ select (string_to_array(n,'/'))[array_length(string_to_array(n,'/'),1)] $$;
 alter table storage.objects enable row level security;
 grant usage on schema public,auth,storage to anon,authenticated; grant all on all tables in schema storage to authenticated;
 `);
@@ -59,7 +60,7 @@ insert into public.cc_website_content(id,published,draft) values(1,'{"church":"A
 `);
 
 // --- 4. migrations, in the documented order; each must apply twice
-const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql', 'events-sync-migration.sql'];
+const order = ['messaging-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql', 'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql', 'events-sync-migration.sql', 'photos-security-migration.sql'];
 let bad = 0;
 for (const f of order) {
   const sql = fs.readFileSync(repo + f, 'utf8');
@@ -231,6 +232,58 @@ T('members read synced events like any other event', 'ok [{"title":"From site (e
 T("church B members cannot see church A's unpublished synced rows", 'ok []', await (async () => { await db.exec(`update public.church_events set published=false where source='website' and church_id='${defaultChurch}'`); return await as(U.B2, `select title from public.church_events where source='website' and church_id='${defaultChurch}'`) })());
 T('admin clears the address', 'ok', await as(U.A1, `select public.cc_set_events_feed('')`));
 T('clearing removes the feed and the status', 'ok [{"events_feed_url":null,"events_sync_status":null}]', await (async () => { const r = await db.query(`select events_feed_url,events_sync_status from public.churches where slug='default'`); return 'ok ' + JSON.stringify(r.rows) })());
+
+
+// --- SECURITY FIX (members could approve themselves) + member photos
+const PH = u => `${defaultChurch}/${u}.jpg`;
+await db.exec(`insert into auth.users values('a4000000-0000-0000-0000-000000000004') on conflict do nothing`);
+await db.exec(`insert into public.member_profiles(user_id,display_name,approved,directory_visible,church_id) values('a4000000-0000-0000-0000-000000000004','Unapproved A4',false,false,'${defaultChurch}') on conflict do nothing`);
+const A4 = 'a4000000-0000-0000-0000-000000000004';
+T('a member can NOT approve themselves', 'ERR permission denied', await as(A4, `update public.member_profiles set approved=true where user_id='${A4}' returning approved`));
+T('a member can NOT move themselves to another church', 'ERR permission denied', await as(A4, `update public.member_profiles set church_id='${B}' where user_id='${A4}'`));
+T('a member can NOT change their own user id / creation date', 'ERR permission denied', await as(A4, `update public.member_profiles set created_at=now() where user_id='${A4}'`));
+T('a member CAN still edit their own bio', 'ok [{"bio":"Hello"}]', await as(A4, `update public.member_profiles set bio='Hello' where user_id='${A4}' returning bio`));
+T('...but still cannot edit someone else', 'ok []', await as(A4, `update public.member_profiles set bio='Hacked' where user_id='${U.A2}' returning bio`));
+T('an unapproved member is still unapproved', 'ok [{"approved":false}]', await (async () => { const r = await db.query(`select approved from public.member_profiles where user_id='${A4}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('the administrator can still approve them (through the approval function)', 'ok', await as(U.A1, `select public.cc_manage_member('${A4}','approve_member')`));
+await db.exec(`update public.member_profiles set approved=false where user_id='${A4}'`);
+T('gender must be female or male', 'ERR', await as(U.A2, `update public.member_profiles set gender='other' where user_id='${U.A2}'`));
+T('a member sets their gender (for the default picture)', 'ok [{"gender":"female"}]', await as(U.A2, `update public.member_profiles set gender='female' where user_id='${U.A2}' returning gender`));
+T('photo sharing starts OFF', 'ok [{"photo_visible":false}]', await as(U.A2, `select photo_visible from public.member_profiles where user_id='${U.A2}'`));
+T('a photo location must be your own file', 'ERR', await as(U.A2, `update public.member_profiles set photo_path='${PH(U.A3)}' where user_id='${U.A2}'`));
+T('private bucket', 'ok [{"public":false}]', await (async () => { const r = await db.query(`select public from storage.buckets where id='member-photos'`); return 'ok ' + JSON.stringify(r.rows) })());
+// storage rules
+const put = (u, name) => as(u, `insert into storage.objects(bucket_id,name) values('member-photos','${name}') returning name`);
+T('a member uploads their own photo', 'ok', await put(U.A2, PH(U.A2)));
+T("a member can NOT upload into someone else's photo", 'ERR', await put(U.A3, PH(U.A2)));
+T("a member from ANOTHER church can NOT put a file in this church's folder", 'ERR', await put(U.B2, PH(U.B2).replace(B, defaultChurch)));
+T('files in another bucket are not covered by these rules', 'ERR', await as(U.A2, `insert into storage.objects(bucket_id,name) values('church-media','${PH(U.A2)}')`));
+T('owner can open their own photo', 'ok [{"n":"1"}]', await as(U.A2, `select count(*)::text n from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}'`));
+T('while sharing is OFF, other members cannot open it', 'ok [{"n":"0"}]', await as(U.A3, `select count(*)::text n from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}'`));
+T('administrators can open it', 'ok [{"n":"1"}]', await as(U.A1, `select count(*)::text n from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}'`));
+await as(U.A2, `update public.member_profiles set photo_path='${PH(U.A2)}', photo_visible=true where user_id='${U.A2}'`);
+T('after they turn sharing ON, an approved member of the same church can open it', 'ok [{"n":"1"}]', await as(U.A3, `select count(*)::text n from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}'`));
+T('an UNAPPROVED member still cannot', 'ok [{"n":"0"}]', await as(A4, `select count(*)::text n from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}'`));
+T("another church's members still cannot", 'ok [{"n":"0"}]', await as(U.B2, `select count(*)::text n from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}'`));
+T("another member can NOT delete or replace it", 'ok []', await as(U.A3, `delete from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}' returning name`));
+T("another church's administrator can NOT touch it", 'ok []', await as(U.B1, `delete from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}' returning name`));
+T('an administrator can remove it', 'ok [{"name"', await as(U.A1, `delete from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}' returning name`));
+await put(U.A2, PH(U.A2));
+T('a member can remove their own photo', 'ok [{"name"', await as(U.A2, `delete from storage.objects where bucket_id='member-photos' and name='${PH(U.A2)}' returning name`));
+// staff-entered members
+const dirIdA = (await db.query(`select id from public.cc_directory_members where church_id='${defaultChurch}' limit 1`)).rows[0].id;
+const DP = `${defaultChurch}/dir-${dirIdA}.jpg`;
+T('administrator uploads a staff-entered member\'s photo', 'ok', await put(U.A1, DP));
+T('an ordinary member cannot see staff-entered photos', 'ok [{"n":"0"}]', await as(U.A3, `select count(*)::text n from storage.objects where name='${DP}'`));
+T('an ordinary member cannot upload one', 'ERR', await put(U.A3, DP));
+T("another church's administrator cannot see them", 'ok [{"n":"0"}]', await as(U.B1, `select count(*)::text n from storage.objects where name='${DP}'`));
+T('administrator records gender + photo + consent for a staff-entered member', 'ok', await as(U.A1, `select public.cc_set_directory_profile('${dirIdA}','male','${DP}',true)`));
+T('it is stored', 'ok [{"gender":"male","photo_visible":true}]', await (async () => { const r = await db.query(`select gender,photo_visible from public.cc_directory_members where id='${dirIdA}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('removing the photo also turns sharing off', 'ok [{"photo_path":null,"photo_visible":false}]', await (async () => { await as(U.A1, `select public.cc_set_directory_profile('${dirIdA}','male',null,true)`); const r = await db.query(`select photo_path,photo_visible from public.cc_directory_members where id='${dirIdA}'`); return 'ok ' + JSON.stringify(r.rows) })());
+T('a wrong photo location is refused', 'ERR Invalid photo location', await as(U.A1, `select public.cc_set_directory_profile('${dirIdA}','male','${defaultChurch}/dir-other.jpg',false)`));
+T('gender must be female or male here too', 'ERR Gender', await as(U.A1, `select public.cc_set_directory_profile('${dirIdA}','x',null,false)`));
+T('only administrators may use it', 'ERR Administrator access required', await as(U.A3, `select public.cc_set_directory_profile('${dirIdA}','male',null,false)`));
+T("an administrator of another church cannot change this church's staff-entered member", 'ERR Directory member not found', await as(U.B1, `select public.cc_set_directory_profile('${dirIdA}','male',null,false)`));
 
 // --- rollback: restores the single-church shape and the original functions
 await db.exec(`reset role`);
