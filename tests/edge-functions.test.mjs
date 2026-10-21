@@ -112,6 +112,7 @@ const SEC = {'x-cc-webhook-secret': 'sekret'};
   const m = mapEvent({id: 273, title: 'Zoom <b>Prayer</b>', date: '2026-02-02', time: '', loc: '<a href="https://us02web.zoom.us/j/65?pwd=x" target="_blank">Online via Zoom</a>', desc: '<script>alert(1)</script>Join us', endTime: '8:00 PM'}, 'America/New_York');
   T('website HTML is turned into plain text and script/style content is dropped', m.title === 'Zoom Prayer' && m.location === 'Online via Zoom' && !/[<>]/.test(m.description + m.location + m.title) && !/alert/.test(m.description), JSON.stringify(m));
   T('all-day events are labelled and the link is kept', /All day\./.test(m.description) && /Link: https:\/\/us02web\.zoom\.us/.test(m.description) && /Ends 8:00 PM/.test(m.description), m.description);
+  T('events with no place or description save empty text, never null (the database requires text)', typeof mapEvent({id: 9, title: 'No place', date: '2026-02-02', time: '7:00 PM'}, 'America/New_York').location === 'string' && typeof mapEvent({id: 9, title: 'No place', date: '2026-02-02', time: '7:00 PM'}, 'America/New_York').description === 'string' && mapEvent({id: 9, title: 'No place', date: '2026-02-02', time: '7:00 PM'}, 'America/New_York').location === '');
   T('events without a title or valid date are skipped', mapEvent({id: 1, title: '', date: '2026-02-02'}, 'America/New_York') === null && mapEvent({id: 2, title: 'x', date: 'soon'}, 'America/New_York') === null);
   T('only public https addresses are allowed', safeFeedUrl('https://example.org/api/events') && !safeFeedUrl('http://example.org/e') && !safeFeedUrl('https://127.0.0.1/e') && !safeFeedUrl('https://localhost/e') && !safeFeedUrl('https://intranet/e') && !safeFeedUrl('https://x.internal/e') && !safeFeedUrl('file:///etc/passwd') && !safeFeedUrl('https://[::1]/e'));
 
@@ -134,6 +135,7 @@ const SEC = {'x-cc-webhook-secret': 'sekret'};
   T('church B has no address set, so its admin gets a clear message', (await call('jwt-b-admin')).status === 400);
   let res = await call('jwt-a-admin'); const out = await res.json();
   T('administrator sync succeeds', res.status === 200 && out.ok === true, JSON.stringify(out));
+  T('no saved website event has a null description or location (database rule)', websiteRows(A).every(e => typeof e.description === 'string' && typeof e.location === 'string'));
   T(`${total} website events -> ${out.synced} saved (+${out.skipped} incomplete skipped)`, out.synced + out.skipped === total && websiteRows(A).length === out.synced);
   T('events were read from the church website address and nowhere else', fetched.length === 1 && fetched[0] === FEED, fetched.join(','));
   T('hand-made events are untouched, other church untouched', globalThis.__db.church_events.some(e => e.id === 'manual-1') && globalThis.__db.church_events.some(e => e.id === 'b-manual') && websiteRows(B).length === 0);

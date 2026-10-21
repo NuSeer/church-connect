@@ -45,7 +45,7 @@ export function mapEvent(e: any, tz: string) {
   const urls = [...new Set([...links(e?.loc), ...links(e?.desc), ...(typeof e?.zoom === 'string' && e.zoom.startsWith('https://') ? [e.zoom] : [])])].slice(0, 3);
   if (urls.length) extra.push('Link: ' + urls.join(' '));
   const location = stripTags(e?.loc).slice(0, 200);
-  return { source: 'website', external_id: String(id), title, description: extra.join(' ').slice(0, 2000) || null, location: location || null, starts_at: startsAt, recurrence: 'none', published: true };
+  return { source: 'website', external_id: String(id), title, description: extra.join(' ').slice(0, 2000), location, starts_at: startsAt, recurrence: 'none', published: true };
 }
 
 // ---- Reading a feed: the church website's own JSON list, or a standard calendar (.ics) feed ----
