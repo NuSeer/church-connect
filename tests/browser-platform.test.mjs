@@ -13,7 +13,7 @@ const server = http.createServer((req, res) => {
   if (p === '/config.js' && configOverride) { res.writeHead(200, {'content-type': 'text/javascript'}); return res.end(configOverride) }
   const f = path.join(root, p);
   if (!f.startsWith(root) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) { res.writeHead(404); return res.end() }
-  res.writeHead(200, {'content-type': types[path.extname(f)] || 'text/plain'}); res.end(fs.readFileSync(f));
+  res.writeHead(200, {'content-type': types[path.extname(f)] || 'text/plain'}); res.end(path.basename(f) === 'config.js' ? fs.readFileSync(f, 'utf8').replace('https://khnakybowzrfpqwakphi.supabase.co', 'https://vizcmyqyoaazkcytcunp.supabase.co').replace('sb_publishable_ftUugSYhXbtSHNLeY-e4vw_dIoNkHlN', 'sb_publishable_ugyikgHimwHU3wGMFmxojg_qGYRCg61') : fs.readFileSync(f)); // tests run on localhost: point it at the project the mocks answer for
 }).listen(0);
 const port = server.address().port;
 const browser = await puppeteer.launch({executablePath: 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: 'new', args: ['--no-sandbox']});
@@ -46,13 +46,15 @@ async function open(url, st = {}) {
       else if (rpc === 'cc_platform_overview') body = st.overview || [];
       else if (rpc === 'cc_platform_create_church_for') { if (b.p_name === 'Taken Church') { code = 400; body = {message: 'That short name is already taken'} } else body = {church_id: 'cx', admin: st.createdAdmin || 'invited'} }
       else if (rpc === 'cc_update_church_settings') { if (b.p_website_url === 'http://bad.example') { code = 400; body = {message: 'Use a full https:// web address, or leave it blank'} } else body = null }
+      else if (rpc === 'cc_update_church_colors') { if (b.p_primary === '#ffff99') { code = 400; body = {message: 'The main color is too light for white text. Choose a darker one.'} } else body = null }
       else if (rpc === 'cc_invite_member') { if (b.p_email === 'dup@example.invalid') { code = 400; body = {message: 'That person is already a member of your church'} } else body = 'i1' }
       else body = null;
     }
     else if (p.endsWith('/rest/v1/church_admins')) body = st.isAdmin ? [{user_id: ME.id}] : [];
     else if (p.endsWith('/rest/v1/member_profiles')) body = [PROFILE];
     else if (p.endsWith('/rest/v1/churches')) {
-      if (st.noWebsiteColumn && /website_url/.test(u.search)) { code = 400; body = {message: 'column churches.website_url does not exist'} }
+      if (st.noColorsColumn && /brand_primary/.test(u.search)) { code = 400; body = {message: 'column churches.brand_primary does not exist'} }
+      else if (st.noWebsiteColumn && /website_url/.test(u.search)) { code = 400; body = {message: 'column churches.website_url does not exist'} }
       else body = st.churches || [NBOC];
     }
     else if (p.endsWith('/rest/v1/cc_invites')) body = st.invites || [];
@@ -92,6 +94,37 @@ T('addresses map to environments (NBOC has its own; unknown addresses use the de
   await tab.$eval('#settingsWebsite', el => { el.value = '' }); await tab.type('#settingsWebsite', 'http://bad.example'); await tab.evaluate(() => { document.getElementById('settingsWebsite').type = 'text' });
   await tab.click('#settingsForm button[type=submit]'); await new Promise(r => setTimeout(r, 700));
   T('a rejected website shows the reason in plain words', /https:\/\//.test(await text(tab, '#settingsStatus') || ''), await text(tab, '#settingsStatus'));
+  T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
+
+// ---------------- Church colors ----------------
+const GREEN = {...NBOC, brand_primary: '#1a5c3a', brand_accent: '#f2b705'};
+const rootVar = (tab, n) => tab.evaluate(v => document.documentElement.style.getPropertyValue(v).trim(), n);
+{ const {tab, errors} = await open('connect.html', {churches: [GREEN]});
+  T('each church has its own colors that replace the standard ones across the member area (header, buttons, accent)', await rootVar(tab, '--church-primary') === '#1a5c3a' && await rootVar(tab, '--church-accent') === '#f2b705' && await rootVar(tab, '--cc-purple') === '#1a5c3a');
+  T('...the header really is that color on screen', await tab.evaluate(() => getComputedStyle(document.querySelector('.nav')).backgroundColor) === 'rgb(26, 92, 58)', await tab.evaluate(() => getComputedStyle(document.querySelector('.nav')).backgroundColor));
+  T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
+{ const {tab} = await open('connect.html', {signedOut: true, churches: [GREEN]});
+  T('the sign-in page uses the church colors too', await rootVar(tab, '--church-primary') === '#1a5c3a'); await tab.close() }
+{ const {tab} = await open('connect.html', {churches: [NBOC]});
+  T('a church that has not chosen colors keeps the standard look untouched', await rootVar(tab, '--church-primary') === '' && await tab.evaluate(() => getComputedStyle(document.querySelector('.nav')).backgroundColor) === 'rgb(73, 51, 162)'); await tab.close() }
+{ const {tab} = await open('connect.html', {noColorsColumn: true, churches: [NBOC]});
+  T('before the colors database update: name still shows, standard colors stay', await text(tab, '.brand [data-church]') === 'New Beginnings Outreach Center' && await rootVar(tab, '--church-primary') === ''); await tab.close() }
+{ const {tab} = await open('connect.html', {churches: [{...NBOC, brand_primary: 'url(javascript:x)', brand_accent: 'red'}]});
+  T('anything that is not a plain #rrggbb color is ignored', await rootVar(tab, '--church-primary') === '' && await rootVar(tab, '--church-accent') === ''); await tab.close() }
+{ const {tab, rec, errors} = await open('admin-center.html', {isAdmin: true, churches: [GREEN]});
+  T('the color pickers show the saved colors', await tab.evaluate(() => document.getElementById('colorPrimary').value) === '#1a5c3a' && await tab.evaluate(() => document.getElementById('colorAccent').value) === '#f2b705');
+  await tab.$eval('#colorPrimary', el => { el.value = '#7a1f3d'; el.dispatchEvent(new Event('input', {bubbles: true})) });
+  T('picking a color previews it straight away', await rootVar(tab, '--church-primary') === '#7a1f3d' && await tab.evaluate(() => getComputedStyle(document.querySelector('.nav')).backgroundColor) === 'rgb(122, 31, 61)');
+  await tab.click('#colorsForm button[type=submit]'); await new Promise(r => setTimeout(r, 600));
+  const sv = rec.rpc.find(r => r.fn === 'cc_update_church_colors');
+  T('saving sends both colors', sv && sv.p_primary === '#7a1f3d' && sv.p_accent === '#f2b705', JSON.stringify(sv));
+  T('it says Saved', /Saved/.test(await text(tab, '#colorsStatus') || ''));
+  await tab.$eval('#colorPrimary', el => { el.value = '#ffff99'; el.dispatchEvent(new Event('input', {bubbles: true})) });
+  await tab.click('#colorsForm button[type=submit]'); await new Promise(r => setTimeout(r, 600));
+  T('a color too light for white text is refused with the reason', /too light/.test(await text(tab, '#colorsStatus') || ''), await text(tab, '#colorsStatus'));
+  await tab.click('#colorsReset'); await new Promise(r => setTimeout(r, 600));
+  const rs = rec.rpc.filter(r => r.fn === 'cc_update_church_colors').pop();
+  T('"Back to standard colors" sends blanks', rs && rs.p_primary === '' && rs.p_accent === '', JSON.stringify(rs));
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
 
 // ---------------- Invites (administrator) ----------------
