@@ -22,6 +22,12 @@ drop function if exists public.cc_member_access(); drop function if exists publi
 drop function if exists public.cc_set_events_feed(text,text);
 drop index if exists public.church_events_website_uq;
 alter table public.church_events drop column if exists source; alter table public.church_events drop column if exists external_id;
+-- member photos (photos-security-migration.sql). The SECURITY FIX (members cannot edit approved/church_id) is deliberately kept.
+drop policy if exists cc_photo_read on storage.objects; drop policy if exists cc_photo_insert on storage.objects;
+drop policy if exists cc_photo_update on storage.objects; drop policy if exists cc_photo_delete on storage.objects;
+drop function if exists public.cc_photo_access(text, boolean); drop function if exists public.cc_set_directory_profile(uuid, text, text, boolean);
+alter table public.member_profiles drop column if exists gender, drop column if exists photo_path, drop column if exists photo_visible;
+alter table public.cc_directory_members drop column if exists gender, drop column if exists photo_path, drop column if exists photo_visible;
 -- functions: drop the new signatures, then restore the originals
 drop function if exists public.cc_public_website(uuid); drop function if exists public.create_my_profile(text,uuid);
 drop function if exists public.cc_platform_create_church(text,text,uuid); drop function if exists public.cc_platform_set_subscription(uuid,text,text,timestamptz);
