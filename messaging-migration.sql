@@ -5,8 +5,11 @@ create table if not exists public.conversation_read_states (
  last_read_at timestamptz not null default now(),
  primary key(conversation_id,user_id));
 alter table public.conversation_read_states enable row level security;
+drop policy if exists "read own markers" on public.conversation_read_states;
 create policy "read own markers" on public.conversation_read_states for select to authenticated using(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid()));
+drop policy if exists "insert own markers" on public.conversation_read_states;
 create policy "insert own markers" on public.conversation_read_states for insert to authenticated with check(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid()));
+drop policy if exists "update own markers" on public.conversation_read_states;
 create policy "update own markers" on public.conversation_read_states for update to authenticated using(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid())) with check(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid()));
 create or replace function public.my_conversation_unread_counts()
 returns table(conversation_id uuid,unread_count bigint)

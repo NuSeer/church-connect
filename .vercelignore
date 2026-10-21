@@ -1,0 +1,5 @@
+# Keep setup files out of the public website (schema, setup notes and server code are not web content).
+*.sql
+*.md
+supabase
+tests

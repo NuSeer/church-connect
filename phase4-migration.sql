@@ -25,17 +25,23 @@ create table if not exists public.ministry_join_requests (
 alter table public.member_church_titles enable row level security;
 alter table public.ministry_join_requests enable row level security;
 alter table public.church_organization_preferences enable row level security;
+drop policy if exists "Member reads own titles" on public.member_church_titles;
 create policy "Member reads own titles" on public.member_church_titles for select to authenticated using(user_id=auth.uid() or exists(select 1 from public.church_admins a where a.user_id=auth.uid()));
+drop policy if exists "Member creates own titles" on public.member_church_titles;
 create policy "Member creates own titles" on public.member_church_titles for insert to authenticated with check(user_id=auth.uid() and coalesce(array_length(verified_titles,1),0)=0);
+drop policy if exists "Member edits own titles" on public.member_church_titles;
 create policy "Member edits own titles" on public.member_church_titles for update to authenticated using(user_id=auth.uid()) with check(user_id=auth.uid());
 -- IMPORTANT: verified_titles must never be user-writable; column-level grant restrictions below.
 revoke update on public.member_church_titles from authenticated;
 grant update (title_mode,titles,primary_title,courtesy_title,updated_at) on public.member_church_titles to authenticated;
 revoke insert on public.member_church_titles from authenticated;
 grant insert (user_id,title_mode,titles,primary_title,courtesy_title,updated_at) on public.member_church_titles to authenticated;
+drop policy if exists "Member reads own requests" on public.ministry_join_requests;
 create policy "Member reads own requests" on public.ministry_join_requests for select to authenticated using(user_id=auth.uid() or exists(select 1 from public.church_admins a where a.user_id=auth.uid()));
 revoke update on public.ministry_join_requests from authenticated;
+drop policy if exists "Member creates request" on public.ministry_join_requests;
 create policy "Member creates request" on public.ministry_join_requests for insert to authenticated with check(user_id=auth.uid() and status='pending');
 -- No member update policy: approved/rejected status can only be set by trusted server/admin.
+drop policy if exists "Read group terminology" on public.church_organization_preferences;
 create policy "Read group terminology" on public.church_organization_preferences for select to authenticated using(true);
 -- Use server-side privileged actions for administrator approvals and title verification.
