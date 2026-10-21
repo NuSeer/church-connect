@@ -113,6 +113,15 @@ T('addresses map to environments (NBOC has its own; unknown addresses use the de
   const m1 = await text(tab, '#evMonth'); await tab.click('#evNext'); await tab.click('#evNext'); await tab.click('#evNext');
   T('moving forward changes the month and an empty month says so kindly', await text(tab, '#evMonth') !== m1 && /No events scheduled/.test(await text(tab, '#evDetails') || ''));
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
+{ const {tab, rec, errors} = await open('connect.html', {events: []});
+  const n0 = rec.rpc.length; const label = await text(tab, '#refresh');
+  await tab.click('#refresh'); await new Promise(r => setTimeout(r, 150));
+  T('Refresh shows that it is working or done', /Refreshing|Updated just now/.test(await text(tab, '#refresh') || ''), await text(tab, '#refresh'));
+  await new Promise(r => setTimeout(r, 1200));
+  T('...then confirms the page is up to date', /Updated just now/.test(await text(tab, '#refresh') || ''), await text(tab, '#refresh'));
+  await new Promise(r => setTimeout(r, 2800));
+  T('...then goes back to its normal label and can be pressed again', (await text(tab, '#refresh')) === label && await tab.evaluate(() => !document.getElementById('refresh').disabled), await text(tab, '#refresh'));
+  T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
 { const {tab} = await open('connect.html?view=events', {events: []});
   T('a link ?view=events opens the Events tab directly', await vis(tab, '#events')); await tab.close() }
 

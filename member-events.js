@@ -50,5 +50,6 @@ $('evGrid').onclick = ev => {
   const day = Number(b.dataset.day); details(all.filter(x => sameDay(x, month.getFullYear(), month.getMonth(), day)), month.toLocaleDateString(undefined, {month: 'long'}) + ' ' + day);
 };
 document.querySelector('[data-view="events"]').addEventListener('click', load);
+document.addEventListener('cc:refresh', () => { if (!$('events').classList.contains('hidden')) load() });
 if (db) db.channel('member-events').on('postgres_changes', {event: '*', schema: 'public', table: 'church_events'}, () => { if (!$('events').classList.contains('hidden')) load() }).subscribe();
 if (new URLSearchParams(location.search).get('view') === 'events') load();

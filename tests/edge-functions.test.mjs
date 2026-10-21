@@ -168,6 +168,59 @@ const SEC = {'x-cc-webhook-secret': 'sekret'};
   res = await call(null, SEC); const sched = await res.json();
   T('the schedule syncs every church that has an address', sched.results.length === 2 && sched.results.every(x => x.ok) && fetched.length === 2);
   T('each church only gets its own rows', websiteRows(A).every(e => e.church_id === A) && websiteRows(B).every(e => e.church_id === B) && websiteRows(B).length > 0);
+
+  // ---------- standard calendar (.ics) feeds ----------
+  const {icsToEvents, classifyFeed, candidateUrls, detectFeed} = mod;
+  const NOW = new Date('2026-10-21T12:00:00Z');
+  const ICS = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0',
+    'BEGIN:VEVENT', 'UID:worship', 'SUMMARY:Sunday Worship', 'DTSTART;TZID=America/New_York:20261101T090000', 'DTEND;TZID=America/New_York:20261101T110000', 'LOCATION:Main Sanctuary', 'DESCRIPTION:Join us\\, all welcome. A very long line that is folded', ' onto the next line.', 'RRULE:FREQ=WEEKLY;BYDAY=SU;COUNT=3', 'EXDATE;TZID=America/New_York:20261108T090000', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:prayer', 'SUMMARY:Prayer (UTC time)', 'DTSTART:20261104T000000Z', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:fast', 'SUMMARY:Day of Fasting', 'DTSTART;VALUE=DATE:20261125', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:first-sun', 'SUMMARY:Communion', 'DTSTART;TZID=America/New_York:20261101T100000', 'RRULE:FREQ=MONTHLY;BYDAY=1SU;COUNT=2', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:old', 'SUMMARY:Last year', 'DTSTART:20250101T150000Z', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:cx', 'SUMMARY:Cancelled thing', 'DTSTART:20261201T150000Z', 'STATUS:CANCELLED', 'END:VEVENT',
+    'END:VCALENDAR'].join('\r\n');
+  const ev = icsToEvents(ICS, 'America/New_York', NOW), by = t => ev.filter(e => e.title === t);
+  T('a repeating weekly event on Sundays is expanded (3 times, minus the skipped date)', JSON.stringify(by('Sunday Worship').map(e => e.date)) === '["2026-11-01","2026-11-15"]', JSON.stringify(by('Sunday Worship').map(e => e.date)));
+  T('times keep the church local time and the end time is carried', by('Sunday Worship')[0].time === '9:00 AM' && by('Sunday Worship')[0].endTime === '11:00 AM', JSON.stringify(by('Sunday Worship')[0]));
+  T('escaped commas and folded lines are read properly', /Join us, all welcome\. A very long line that is foldedonto the next line\./.test(by('Sunday Worship')[0].desc), by('Sunday Worship')[0].desc);
+  T('a UTC time is converted to the church time zone (00:00Z on Nov 4 = 7:00 PM Eastern on Nov 3)', by('Prayer (UTC time)')[0].date === '2026-11-03' && by('Prayer (UTC time)')[0].time === '7:00 PM', JSON.stringify(by('Prayer (UTC time)')));
+  T('an all-day event has no time', by('Day of Fasting')[0].date === '2026-11-25' && by('Day of Fasting')[0].time === '');
+  T('"first Sunday of the month" repeats on the right days', JSON.stringify(by('Communion').map(e => e.date)) === '["2026-11-01","2026-12-06"]', JSON.stringify(by('Communion').map(e => e.date)));
+  T('old one-time events and cancelled events are left out', by('Last year').length === 0 && by('Cancelled thing').length === 0);
+  T('every converted event passes the same checks as website events', ev.every(e => mapEvent(e, 'America/New_York')), 'x');
+  T('feeds are recognised: calendar, website list, and neither', classifyFeed(ICS) === 'ics' && classifyFeed('{"events":[{"id":1,"title":"A","date":"2026-11-01"}]}') === 'json' && classifyFeed('<html>hello</html>') === null && classifyFeed('{"events":[]}') === null && classifyFeed('BEGIN:VCALENDAR\r\nEND:VCALENDAR') === null);
+
+  reset(base); globalThis.__db.churches[0].events_feed_url = 'https://churchsite.org/cal/feed.ics'; respond = () => new Response(ICS, {status: 200}); fetched = [];
+  res = await call('jwt-a-admin'); const icsOut = await res.json();
+  T('a church whose events address is a .ics calendar syncs its events', res.status === 200 && icsOut.ok === true && websiteRows(A).length > 0 && websiteRows(A).every(e => e.source === 'website' && e.published === true), JSON.stringify(icsOut));
+
+  // ---------- finding the events list automatically ----------
+  const site = new URL('https://churchsite.org/');
+  const html = '<html><head><link rel="alternate" type="text/calendar" href="/cal/feed.ics"></head><body><a href="webcal://churchsite.org/other.ics">Subscribe</a><a href="https://calendar.example.com/ical/x/basic.ics">Google</a><a href="http://insecure.example/x.ics">no</a><a href="https://127.0.0.1/x.ics">no</a></body></html>';
+  const cands = candidateUrls(html, site);
+  T('places to look come from the page first, then the usual addresses', cands[0] === 'https://churchsite.org/cal/feed.ics' && cands.includes('https://churchsite.org/other.ics') && cands.includes('https://calendar.example.com/ical/x/basic.ics') && cands.includes('https://churchsite.org/api/events'), JSON.stringify(cands.slice(0, 5)));
+  T('addresses that are not public https are never tried', !cands.some(u => /insecure|127\.0\.0\.1/.test(u)));
+  const serve = map => u => { const k = Object.keys(map).find(x => u === x); return k ? new Response(map[k], {status: 200}) : new Response('nope', {status: 404}) };
+  const detectCall = (jwt, body) => handler(new Request('http://x/fn', {method: 'POST', headers: {authorization: 'Bearer ' + jwt}, body: JSON.stringify(body)}));
+  const withSite = (url, feed = null) => ({...base, churches: [{...base.churches[0], website_url: url, events_feed_url: feed}, base.churches[1]]});
+  reset(withSite('https://churchsite.org')); respond = serve({'https://churchsite.org/': html, 'https://churchsite.org/cal/feed.ics': ICS}); fetched = [];
+  res = await detectCall('jwt-a-admin', {detect: true}); const dOut = await res.json();
+  T('detect finds the calendar feed the website page points to, saves it, and copies the events', dOut.found === true && dOut.type === 'ics' && dOut.feed === 'https://churchsite.org/cal/feed.ics' && dOut.ok === true && globalThis.__db.churches[0].events_feed_url === dOut.feed && websiteRows(A).length > 0, JSON.stringify(dOut));
+  reset(withSite('https://churchsite.org')); respond = serve({'https://churchsite.org/api/events': JSON.stringify(feedJson)}); fetched = [];
+  res = await detectCall('jwt-a-admin', {detect: true}); const d2 = await res.json();
+  T('detect also finds a website events list at the usual address (like /api/events)', d2.found === true && d2.type === 'json' && globalThis.__db.churches[0].events_feed_url === 'https://churchsite.org/api/events', JSON.stringify(d2));
+  reset(withSite('https://churchsite.org')); respond = serve({}); res = await detectCall('jwt-a-admin', {detect: true}); const d3 = await res.json();
+  T('when nothing is found it says so plainly and changes nothing', d3.found === false && /could not find/.test(d3.error) && !globalThis.__db.churches[0].events_feed_url && websiteRows(A).length === 0, JSON.stringify(d3));
+  reset(withSite(null)); res = await detectCall('jwt-a-admin', {detect: true});
+  T('with no website address saved it asks for one', res.status === 400 && /website address/.test((await res.json()).error));
+  reset(withSite('https://churchsite.org', FEED)); fetched = []; respond = serve({}); res = await detectCall('jwt-a-admin', {detect: true, ifEmpty: true}); const d4 = await res.json();
+  T('automatic detection never replaces an address the church already set', d4.found === false && fetched.length === 0 && globalThis.__db.churches[0].events_feed_url === FEED, JSON.stringify(d4) + fetched.join());
+  reset(withSite('https://churchsite.org')); res = await detectCall('jwt-member', {detect: true});
+  T('only an administrator can run detection', res.status === 403);
+  reset(withSite('http://127.0.0.1/')); fetched = []; res = await detectCall('jwt-a-admin', {detect: true});
+  T('an internal website address is never fetched', res.status === 400 && fetched.length === 0);
 }
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED');
 process.exit(fails ? 1 : 0);

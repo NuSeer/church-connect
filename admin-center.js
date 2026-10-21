@@ -23,6 +23,8 @@ $('settingsForm').onsubmit=async ev=>{
  if(error)return $('settingsStatus').textContent=error.message;
  document.querySelectorAll('[data-church]').forEach(el=>el.textContent=$('settingsName').value.trim());
  $('settingsStatus').textContent='Saved. The new name shows across the app.';
+ // a church with a website: look for its events list once, unless one is already set
+ if($('settingsWebsite').value.trim()){try{const r=await db.functions.invoke('sync-website-events',{body:{detect:true,ifEmpty:true}});if(r.data&&r.data.found)$('settingsStatus').textContent+=' We also found your website events and copied '+r.data.synced+' of them.'}catch{}}
 };
 // ---- Church colors (applied live as you pick, saved with the button) ----
 import {applyColors} from './brand.js';

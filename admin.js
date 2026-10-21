@@ -34,6 +34,14 @@ $('feedForm').onsubmit=async ev=>{
  if(error)return feedMessage(error.message,true);
  await loadFeed();feedMessage(url?'Address saved. Press Sync now to copy your events.':'Address removed. Events already copied stay until you delete them.');
 };
+$('feedDetect').onclick=async()=>{
+ $('feedDetect').disabled=true;feedMessage('Looking for your events list…');
+ const {data,error}=await db.functions.invoke('sync-website-events',{body:{detect:true}});
+ let msg=null;if(error){msg=error.message;try{msg=(await error.context.json()).error||msg}catch{}}else if(data&&data.found===false)msg=data.error||'No events list found.';
+ $('feedDetect').disabled=false;await loadFeed();await load();
+ if(msg)return feedMessage(msg,true);
+ feedMessage('Found it and copied '+data.synced+' events from '+data.feed);
+};
 $('feedSync').onclick=async()=>{
  $('feedSync').disabled=true;feedMessage('Reading your website…');
  const {data,error}=await db.functions.invoke('sync-website-events',{body:{}});
