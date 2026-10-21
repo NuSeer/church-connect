@@ -57,6 +57,7 @@ async function open(url, st = {}) {
       else if (st.noWebsiteColumn && /website_url/.test(u.search)) { code = 400; body = {message: 'column churches.website_url does not exist'} }
       else body = st.churches || [NBOC];
     }
+    else if (p.endsWith('/rest/v1/church_events')) body = st.events || [];
     else if (p.endsWith('/rest/v1/cc_invites')) body = st.invites || [];
     await cdp.send('Fetch.fulfillRequest', {requestId: ev.requestId, responseCode: code, responseHeaders: [{name: 'content-type', value: 'application/json'}, {name: 'access-control-allow-origin', value: '*'}, {name: 'access-control-allow-headers', value: '*'}, {name: 'access-control-allow-methods', value: '*'}], body: Buffer.from(m === 'OPTIONS' ? '' : JSON.stringify(body)).toString('base64')}).catch(() => {});
   });
@@ -95,6 +96,25 @@ T('addresses map to environments (NBOC has its own; unknown addresses use the de
   await tab.click('#settingsForm button[type=submit]'); await new Promise(r => setTimeout(r, 700));
   T('a rejected website shows the reason in plain words', /https:\/\//.test(await text(tab, '#settingsStatus') || ''), await text(tab, '#settingsStatus'));
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
+
+// ---------------- Events tab (member area) ----------------
+{ const d = new Date(); d.setHours(10, 0, 0, 0);
+  const events = [{id: 'e1', church_id: 'c1', title: 'Sunday Worship', description: 'Join us', location: 'Main Sanctuary', starts_at: d.toISOString(), recurrence: 'none', published: true},
+                  {id: 'e2', church_id: 'c1', title: 'Bible Study', description: '', location: null, starts_at: new Date(d.getTime() + 86400000).toISOString(), recurrence: 'none', published: true}];
+  const {tab, errors} = await open('connect.html', {events});
+  T('the member area has an Events tab (no group needed)', await tab.evaluate(() => !!document.querySelector('[data-view="events"]:not(.hidden)')));
+  await tab.click('[data-view="events"]'); await new Promise(r => setTimeout(r, 900));
+  T('clicking it shows the calendar for this month', await vis(tab, '#events') && !!(await text(tab, '#evMonth')) && (await tab.evaluate(() => document.querySelectorAll('#evGrid .day:not(.empty)').length)) >= 28);
+  T('each of the church events appears on its day and in the list', (await text(tab, '#evGrid') || '').includes('Sunday Worship') && /Sunday Worship/.test(await text(tab, '#evDetails') || '') && /Main Sanctuary/.test(await text(tab, '#evDetails') || ''), await text(tab, '#evDetails'));
+  T('an event with no place says "Location TBA"', /Location TBA/.test(await text(tab, '#evDetails') || ''));
+  if (!(await text(tab, '#evGrid') || '').includes('Bible Study')) { await tab.click('#evNext'); await new Promise(r => setTimeout(r, 300)) } // tomorrow can fall in next month
+  await tab.evaluate(() => [...document.querySelectorAll('#evGrid .day')].find(b => /Bible Study/.test(b.textContent)).click());
+  T('clicking a day lists just that day', /Bible Study/.test(await text(tab, '#evDetails') || '') && !/Sunday Worship/.test(await text(tab, '#evDetails') || ''), await text(tab, '#evDetails'));
+  const m1 = await text(tab, '#evMonth'); await tab.click('#evNext'); await tab.click('#evNext'); await tab.click('#evNext');
+  T('moving forward changes the month and an empty month says so kindly', await text(tab, '#evMonth') !== m1 && /No events scheduled/.test(await text(tab, '#evDetails') || ''));
+  T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
+{ const {tab} = await open('connect.html?view=events', {events: []});
+  T('a link ?view=events opens the Events tab directly', await vis(tab, '#events')); await tab.close() }
 
 // ---------------- Church colors ----------------
 const GREEN = {...NBOC, brand_primary: '#1a5c3a', brand_accent: '#f2b705'};
