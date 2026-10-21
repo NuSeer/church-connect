@@ -10,7 +10,7 @@ document.querySelectorAll('[data-church]').forEach(el=>el.textContent=window.CHU
 function notice(s){$('notice').textContent=s}function fail(error){notice(error?.message||String(error))}
 function item(text){const d=document.createElement('div');d.className='list-item';d.textContent=text;return d}
 function btn(text,handler){const b=document.createElement('button');b.className='btn secondary';b.textContent=text;b.onclick=handler;return b}
-async function init(){if(!db){notice('Setup required: configure Supabase in config.js and run schema-phase3.sql.');show('signin',false);return}const {data:{user}}=await db.auth.getUser();me=user;show('signin',!me);show('portal',false);show('profileSetup',false);show('pending',false);if(!me)return;const r=await db.from('member_profiles').select('*').eq('user_id',me.id).maybeSingle();if(r.error)return fail(r.error);profile=r.data;if(!profile){show('profileSetup',true);return}if(!profile.approved){show('pending',true);return}show('portal',true);await load();await setupBroadcast();openViewFromUrl();await loadSmsPreferences();await setupPushUI();subscribe()}
+async function init(){if(!db){notice('Setup required: configure Supabase in config.js and run schema-phase3.sql.');show('signin',false);return}const {data:{user}}=await db.auth.getUser();me=user;show('signin',!me);show('portal',false);show('profileSetup',false);show('pending',false);if(!me)return;const r=await db.from('member_profiles').select('*').eq('user_id',me.id).maybeSingle();if(r.error)return fail(r.error);profile=r.data;if(!profile){show('profileSetup',true);return}if(!profile.approved){show('pending',true);return}show('portal',true);await load();await setupBroadcast();await setupAdminTab();openViewFromUrl();await loadSmsPreferences();await setupPushUI();subscribe()}
 let registrationMode=false;
 function setRegistrationMode(on){registrationMode=on;show('confirmPasswordGroup',on);$('confirmPassword').disabled=!on;$('confirmPassword').required=on;$('password').autocomplete=on?'new-password':'current-password';$('authSubmit').textContent=on?'Create account':'Sign in';$('register').textContent=on?'Back to sign in':'Create account';$('password').value='';$('confirmPassword').value='';notice('');updatePasswordMatch()}
 function updatePasswordMatch(){const status=$('passwordMatch');if(!registrationMode)return;const first=$('password').value,second=$('confirmPassword').value;status.textContent=!second?'Enter the same password twice.':first===second?'Passwords match.':'Passwords do not match.';status.classList.toggle('password-error',!!second&&first!==second)}
@@ -54,6 +54,27 @@ async function broadcastSmsButtons(title,body){
 }
 // Open a tab named in the address (used by notification taps, e.g. connect.html?view=updates).
 function openViewFromUrl(){const v=new URLSearchParams(location.search).get('view');if(v)document.querySelector(`[data-view="${CSS.escape(v)}"]:not(.hidden)`)?.click()}
+
+// ---- Install as an app (so members open Church Connect straight to sign in) ----
+function setupInstall(){
+ const box=$('installHint');if(!box)return;
+ try{if(localStorage.getItem('cc_install_later')>String(Date.now()-30*864e5))return}catch(e){}
+ if(matchMedia('(display-mode: standalone)').matches||navigator.standalone)return;
+ const text=$('installText'),btn=$('installBtn');let deferred=null;
+ const ios=/iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+ if(ios){text.textContent='Add Church Connect to this phone: tap the Share button (the square with an arrow), then "Add to Home Screen". It will open straight to sign in.';btn.classList.add('hidden');show('installHint',true)}
+ window.addEventListener('beforeinstallprompt',ev=>{ev.preventDefault();deferred=ev;text.textContent='Install Church Connect on this phone so you can open it like any other app.';btn.classList.remove('hidden');show('installHint',true)});
+ btn.onclick=async()=>{if(!deferred)return;deferred.prompt();try{await deferred.userChoice}catch(e){}deferred=null;show('installHint',false)};
+ $('installLater').onclick=()=>{show('installHint',false);try{localStorage.setItem('cc_install_later',String(Date.now()))}catch(e){}};
+ window.addEventListener('appinstalled',()=>show('installHint',false));
+}
+setupInstall();
+
+// ---- Admin tab: administrators and pastors get links to the admin pages (the pages still check who you are) ----
+async function setupAdminTab(){
+ const {data}=await db.rpc('cc_is_admin');
+ $('adminTab').classList.toggle('hidden',data!==true);
+}
 async function load(){notice('');const [dir,mm,up]=await Promise.all([db.from('member_profiles').select('user_id,display_name,bio,directory_visible,directory_contact_visible,contact_email').eq('directory_visible',true).eq('approved',true),db.from('ministry_members').select('ministry_id,is_leader,ministries(id,name,description)').eq('user_id',me.id),db.from('member_updates').select('title,body,created_at,ministry_id').order('created_at',{ascending:false}).limit(50)]);for(const x of [dir,mm,up])if(x.error)return fail(x.error);directory=dir.data;ministries=mm.data;approvedMinistryIds=new Set(ministries.map(m=>String(m.ministry_id)));await loadProfileExtras();renderDirectory();renderMinistries();$('updateList').replaceChildren(...(up.data.length?up.data.map(x=>item(`${x.title} — ${x.body} · ${fmt(x.created_at)}`)):[item('No updates yet.')]));$('displayName').value=profile.display_name;$('bio').value=profile.bio||'';$('directoryVisible').checked=profile.directory_visible;$('contactVisible').checked=profile.directory_contact_visible;$('contactEmail').value=profile.contact_email||'';await loadChats();renderComposeMinistries();await loadGiving()}
 function renderDirectory(){const q=$('directorySearch').value.trim().toLowerCase();const list=q.length>=2?directory.filter(x=>x.display_name.toLowerCase().includes(q)):[];$('directoryList').replaceChildren(...(list.length?list.map(x=>{const row=document.createElement('div');row.className='list-item';const info=document.createElement('div');const strong=document.createElement('strong');strong.textContent=x.display_name;info.append(strong);if(x.bio){const d=document.createElement('p');d.textContent=x.bio;info.append(d)}if(x.directory_contact_visible&&x.contact_email){const d=document.createElement('p');d.textContent=x.contact_email;info.append(d)}row.append(info);if(x.user_id!==me.id)row.append(btn('Message',()=>startChat(x.user_id,x.display_name)));return row}):[item(q.length<2?'Enter at least two letters to search.':'No matching opt-in members.')]))}
 $('directorySearch').oninput=renderDirectory;
