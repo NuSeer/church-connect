@@ -1,0 +1,1338 @@
+-- Church Connect: new project setup, part 2 of 2 (features and first church). Run AFTER part 1.
+
+-- ===== phase4-migration.sql =====
+-- Run in Supabase SQL Editor after the earlier Church Connect schema migrations.
+-- Independent ministries; optional naming terminology is a display preference only.
+create table if not exists public.church_organization_preferences (
+ id boolean primary key default true check (id), group_term text not null default 'Ministry' check (group_term in ('Ministry','Department'))
+);
+-- (one-row-per-church settings are seeded by the multi-church step below)
+create table if not exists public.member_church_titles (
+ user_id uuid primary key references auth.users(id) on delete cascade,
+ title_mode text not null default 'none' check(title_mode in ('title','none')),
+ titles text[] not null default '{}',
+ primary_title text,
+ courtesy_title text not null default 'Sis.' check(courtesy_title in ('Bro.','Sis.')),
+ verified_titles text[] not null default '{}',
+ updated_at timestamptz not null default now(),
+ constraint primary_is_selected check (primary_title is null or primary_title = any(titles))
+);
+create table if not exists public.ministry_join_requests (
+ user_id uuid not null references auth.users(id) on delete cascade,
+ ministry_id uuid not null references public.ministries(id) on delete cascade,
+ status text not null default 'pending' check(status in ('pending','approved','rejected')),
+ requested_at timestamptz not null default now(),
+ primary key(user_id,ministry_id)
+);
+-- Admins approve by adding a row to ministry_members; requests never grant access.
+alter table public.member_church_titles enable row level security;
+alter table public.ministry_join_requests enable row level security;
+alter table public.church_organization_preferences enable row level security;
+drop policy if exists "Member reads own titles" on public.member_church_titles;
+create policy "Member reads own titles" on public.member_church_titles for select to authenticated using(user_id=auth.uid() or exists(select 1 from public.church_admins a where a.user_id=auth.uid()));
+drop policy if exists "Member creates own titles" on public.member_church_titles;
+create policy "Member creates own titles" on public.member_church_titles for insert to authenticated with check(user_id=auth.uid() and coalesce(array_length(verified_titles,1),0)=0);
+drop policy if exists "Member edits own titles" on public.member_church_titles;
+create policy "Member edits own titles" on public.member_church_titles for update to authenticated using(user_id=auth.uid()) with check(user_id=auth.uid());
+-- IMPORTANT: verified_titles must never be user-writable; column-level grant restrictions below.
+revoke update on public.member_church_titles from authenticated;
+grant update (title_mode,titles,primary_title,courtesy_title,updated_at) on public.member_church_titles to authenticated;
+revoke insert on public.member_church_titles from authenticated;
+grant insert (user_id,title_mode,titles,primary_title,courtesy_title,updated_at) on public.member_church_titles to authenticated;
+drop policy if exists "Member reads own requests" on public.ministry_join_requests;
+create policy "Member reads own requests" on public.ministry_join_requests for select to authenticated using(user_id=auth.uid() or exists(select 1 from public.church_admins a where a.user_id=auth.uid()));
+revoke update on public.ministry_join_requests from authenticated;
+drop policy if exists "Member creates request" on public.ministry_join_requests;
+create policy "Member creates request" on public.ministry_join_requests for insert to authenticated with check(user_id=auth.uid() and status='pending');
+-- No member update policy: approved/rejected status can only be set by trusted server/admin.
+drop policy if exists "Read group terminology" on public.church_organization_preferences;
+create policy "Read group terminology" on public.church_organization_preferences for select to authenticated using(true);
+-- Use server-side privileged actions for administrator approvals and title verification.
+
+-- ===== membership-migration.sql =====
+-- Run after schema-phase3.sql and phase4-migration.sql.
+-- Administrative mutations are confined to authenticated church administrators.
+create or replace function public.cc_is_admin() returns boolean language sql stable security definer set search_path = '' as $$
+ select exists(select 1 from public.church_admins where user_id=auth.uid());
+$$;
+revoke all on function public.cc_is_admin() from public;
+grant execute on function public.cc_is_admin() to authenticated;
+
+-- Admin read access for membership review. Existing member self-access policies remain.
+drop policy if exists "cc_admin_read_profiles" on public.member_profiles;
+create policy "cc_admin_read_profiles" on public.member_profiles for select to authenticated using(public.cc_is_admin());
+drop policy if exists "cc_admin_read_memberships" on public.ministry_members;
+create policy "cc_admin_read_memberships" on public.ministry_members for select to authenticated using(public.cc_is_admin());
+drop policy if exists "cc_admin_read_requests" on public.ministry_join_requests;
+create policy "cc_admin_read_requests" on public.ministry_join_requests for select to authenticated using(public.cc_is_admin());
+drop policy if exists "cc_admin_read_titles" on public.member_church_titles;
+create policy "cc_admin_read_titles" on public.member_church_titles for select to authenticated using(public.cc_is_admin());
+
+-- One narrow admin-only RPC for approvals and ministry assignments.
+create or replace function public.cc_manage_member(
+ p_user_id uuid, p_action text, p_ministry_id uuid default null, p_leader boolean default false
+) returns void language plpgsql security definer set search_path = '' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Not authorized'; end if;
+ if not exists(select 1 from public.member_profiles where user_id=p_user_id) then raise exception 'Member not found'; end if;
+ if p_action='approve_member' then
+  update public.member_profiles set approved=true where user_id=p_user_id;
+ elsif p_action='suspend_member' then
+  if p_user_id=auth.uid() then raise exception 'You cannot suspend yourself'; end if;
+  update public.member_profiles set approved=false where user_id=p_user_id;
+  delete from public.ministry_members where user_id=p_user_id;
+ elsif p_action='approve_ministry' then
+  if p_ministry_id is null then raise exception 'Ministry required'; end if;
+  if not exists(select 1 from public.member_profiles where user_id=p_user_id and approved=true) then raise exception 'Approve member first'; end if;
+  insert into public.ministry_members(ministry_id,user_id,is_leader) values(p_ministry_id,p_user_id,false)
+   on conflict(ministry_id,user_id) do nothing;
+  update public.ministry_join_requests set status='approved' where ministry_id=p_ministry_id and user_id=p_user_id;
+ elsif p_action='reject_ministry' then
+  update public.ministry_join_requests set status='rejected' where ministry_id=p_ministry_id and user_id=p_user_id and status='pending';
+ elsif p_action='remove_ministry' then
+  delete from public.ministry_members where ministry_id=p_ministry_id and user_id=p_user_id;
+  delete from public.ministry_join_requests where ministry_id=p_ministry_id and user_id=p_user_id;
+ elsif p_action='set_leader' then
+  update public.ministry_members set is_leader=p_leader where ministry_id=p_ministry_id and user_id=p_user_id;
+  if not found then raise exception 'Approve ministry membership first'; end if;
+ else raise exception 'Unknown action'; end if;
+end; $$;
+revoke all on function public.cc_manage_member(uuid,text,uuid,boolean) from public;
+grant execute on function public.cc_manage_member(uuid,text,uuid,boolean) to authenticated;
+
+-- Official title verification: never accept verification from the member's browser.
+create or replace function public.cc_verify_titles(p_user_id uuid, p_titles text[]) returns void
+language plpgsql security definer set search_path = '' as $$
+declare permitted text[] := array['Pastor','First Lady','Minister','Elder','Missionary','Mother','Evangelist','Deacon','Deaconess'];
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Not authorized'; end if;
+ if exists(select 1 from unnest(coalesce(p_titles,'{}'::text[])) t where not t=any(permitted)) then raise exception 'Invalid title'; end if;
+ insert into public.member_church_titles(user_id,verified_titles) values(p_user_id,coalesce(p_titles,'{}'::text[]))
+ on conflict(user_id) do update set verified_titles=excluded.verified_titles;
+end; $$;
+revoke all on function public.cc_verify_titles(uuid,text[]) from public;
+grant execute on function public.cc_verify_titles(uuid,text[]) to authenticated;
+
+-- Fix phase4 member self-service: do not let members reset approved/rejected requests via upsert.
+-- They can create a new request only if no previous request exists.
+-- Never grant general UPDATE on join requests to authenticated members.
+
+-- ===== directory-ministry-migration.sql =====
+-- Run AFTER phase4-migration.sql and membership-migration.sql.
+-- Staff-entered people do not require Supabase Auth accounts.
+-- They are NOT automatically authorized to read private app messages.
+create table if not exists public.cc_directory_members (
+ id uuid primary key default gen_random_uuid(),
+ full_name text not null check(length(trim(full_name)) between 2 and 150),
+ phone text, email text, courtesy_title text not null default 'Sis.' check(courtesy_title in ('Bro.','Sis.')),
+ church_titles text[] not null default '{}',
+ primary_title text,
+ notes text,
+ sms_consent boolean not null default false,
+ active boolean not null default true,
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ constraint cc_directory_primary_title check(primary_title is null or primary_title=any(church_titles)),
+ constraint cc_directory_contact check(phone is null or length(phone)<=30),
+ constraint cc_directory_email check(email is null or length(email)<=254)
+);
+create table if not exists public.cc_directory_ministries (
+ member_id uuid not null references public.cc_directory_members(id) on delete cascade,
+ ministry_id uuid not null references public.ministries(id) on delete cascade,
+ is_leader boolean not null default false,
+ primary key(member_id,ministry_id)
+);
+alter table public.cc_directory_members enable row level security;
+alter table public.cc_directory_ministries enable row level security;
+drop policy if exists "cc_directory_admin_read" on public.cc_directory_members;
+create policy "cc_directory_admin_read" on public.cc_directory_members for select to authenticated using(public.cc_is_admin());
+drop policy if exists "cc_directory_ministries_admin_read" on public.cc_directory_ministries;
+create policy "cc_directory_ministries_admin_read" on public.cc_directory_ministries for select to authenticated using(public.cc_is_admin());
+-- Writes are only allowed through tightly scoped, admin-checked functions.
+revoke insert,update,delete on public.cc_directory_members from anon,authenticated;
+revoke insert,update,delete on public.cc_directory_ministries from anon,authenticated;
+create or replace function public.cc_save_directory_member(
+ p_id uuid, p_name text, p_phone text, p_email text, p_courtesy text,
+ p_titles text[], p_primary text, p_notes text, p_sms_consent boolean,
+ p_ministry_ids uuid[], p_active boolean default true
+) returns uuid language plpgsql security definer set search_path='' as $$
+declare v_id uuid; allowed text[]:=array['Pastor','First Lady','Minister','Elder','Missionary','Mother','Evangelist','Deacon','Deaconess'];
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if length(trim(coalesce(p_name,''))) not between 2 and 150 then raise exception 'Name must be 2–150 characters'; end if;
+ if p_courtesy not in ('Bro.','Sis.') then raise exception 'Invalid courtesy title'; end if;
+ if exists(select 1 from unnest(coalesce(p_titles,'{}'::text[])) t where not t=any(allowed)) then raise exception 'Invalid church title'; end if;
+ if p_primary is not null and not p_primary=any(coalesce(p_titles,'{}'::text[])) then raise exception 'Primary title must be selected'; end if;
+ if length(coalesce(p_notes,''))>2000 then raise exception 'Notes too long'; end if;
+ if length(coalesce(p_phone,''))>30 or length(coalesce(p_email,''))>254 then raise exception 'Contact information too long'; end if;
+ if exists(select 1 from unnest(coalesce(p_ministry_ids,'{}'::uuid[])) m where not exists(select 1 from public.ministries where id=m)) then raise exception 'Invalid ministry'; end if;
+ if p_id is null then
+  insert into public.cc_directory_members(full_name,phone,email,courtesy_title,church_titles,primary_title,notes,sms_consent,active)
+  values(trim(p_name),nullif(trim(coalesce(p_phone,'')),''),nullif(trim(coalesce(p_email,'')),''),p_courtesy,coalesce(p_titles,'{}'::text[]),p_primary,nullif(trim(coalesce(p_notes,'')),''),coalesce(p_sms_consent,false),coalesce(p_active,true)) returning id into v_id;
+ else
+  update public.cc_directory_members set full_name=trim(p_name),phone=nullif(trim(coalesce(p_phone,'')),''),email=nullif(trim(coalesce(p_email,'')),''),courtesy_title=p_courtesy,church_titles=coalesce(p_titles,'{}'::text[]),primary_title=p_primary,notes=nullif(trim(coalesce(p_notes,'')),''),sms_consent=coalesce(p_sms_consent,false),active=coalesce(p_active,true),updated_at=now() where id=p_id returning id into v_id;
+  if v_id is null then raise exception 'Directory member not found'; end if;
+ end if;
+ delete from public.cc_directory_ministries where member_id=v_id and ministry_id<>all(coalesce(p_ministry_ids,'{}'::uuid[]));
+ insert into public.cc_directory_ministries(member_id,ministry_id)
+ select v_id,m from (select distinct unnest(coalesce(p_ministry_ids,'{}'::uuid[])) m) x
+ on conflict do nothing;
+ return v_id;
+end $$;
+revoke all on function public.cc_save_directory_member(uuid,text,text,text,text,text[],text,text,boolean,uuid[],boolean) from public;
+grant execute on function public.cc_save_directory_member(uuid,text,text,text,text,text[],text,text,boolean,uuid[],boolean) to authenticated;
+
+-- Organization settings: each church can choose terminology, without forced parent groups.
+drop policy if exists "cc_org_admin_update" on public.church_organization_preferences;
+create policy "cc_org_admin_update" on public.church_organization_preferences for update to authenticated using(public.cc_is_admin()) with check(public.cc_is_admin());
+grant update(group_term) on public.church_organization_preferences to authenticated;
+-- Safe ministry creation/editing, without assuming a fixed list of departments.
+create or replace function public.cc_manage_ministry(p_id uuid,p_name text,p_action text default 'save')
+returns uuid language plpgsql security definer set search_path='' as $$
+declare v_id uuid;
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if p_action='save' then
+  if length(trim(coalesce(p_name,''))) not between 2 and 100 then raise exception 'Name must be 2–100 characters'; end if;
+  if p_id is null then insert into public.ministries(name) values(trim(p_name)) returning id into v_id;
+  else update public.ministries set name=trim(p_name) where id=p_id returning id into v_id;
+  end if;
+  if v_id is null then raise exception 'Ministry not found'; end if;
+  return v_id;
+ else raise exception 'Unsupported ministry action'; end if;
+end $$;
+revoke all on function public.cc_manage_ministry(uuid,text,text) from public;
+grant execute on function public.cc_manage_ministry(uuid,text,text) to authenticated;
+
+-- ===== ministry-colors-migration.sql =====
+-- Run after directory-ministry-migration.sql. Safe to rerun.
+alter table public.ministries add column if not exists color text not null default '#64748b';
+alter table public.ministries drop constraint if exists ministries_color_hex;
+alter table public.ministries add constraint ministries_color_hex check (color ~ '^#[0-9A-Fa-f]{6}$');
+-- Admins may update ministry colors; other roles cannot update this column.
+grant update(color) on public.ministries to authenticated;
+drop policy if exists cc_ministry_admin_color_update on public.ministries;
+create policy cc_ministry_admin_color_update on public.ministries for update to authenticated using(public.cc_is_admin()) with check(public.cc_is_admin());
+
+-- ===== phase3-4-migration.sql =====
+-- Church Connect Phase 3 completion + Phase 4 starter. Run after existing membership and directory migrations.
+-- Does not delete member records or modify existing church roles.
+create or replace function public.cc_set_directory_ministry_leader(p_member_id uuid,p_ministry_id uuid,p_is_leader boolean)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ update public.cc_directory_ministries set is_leader=coalesce(p_is_leader,false)
+ where member_id=p_member_id and ministry_id=p_ministry_id;
+ if not found then raise exception 'Directory assignment not found'; end if;
+end $$;
+revoke all on function public.cc_set_directory_ministry_leader(uuid,uuid,boolean) from public;
+grant execute on function public.cc_set_directory_ministry_leader(uuid,uuid,boolean) to authenticated;
+
+create or replace function public.cc_create_ministry_activity(p_ministry_id uuid,p_title text,p_details text,p_starts_at timestamptz)
+returns uuid language plpgsql security definer set search_path='' as $$
+declare v_id uuid;
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if length(trim(coalesce(p_title,''))) not between 2 and 180 then raise exception 'Activity title must be 2–180 characters'; end if;
+ if length(coalesce(p_details,''))>2000 then raise exception 'Details too long'; end if;
+ if p_starts_at is null then raise exception 'Start date is required'; end if;
+ insert into public.ministry_activities(ministry_id,title,details,starts_at)
+ values(p_ministry_id,trim(p_title),nullif(trim(coalesce(p_details,'')),''),p_starts_at) returning id into v_id;
+ return v_id;
+end $$;
+revoke all on function public.cc_create_ministry_activity(uuid,text,text,timestamptz) from public;
+grant execute on function public.cc_create_ministry_activity(uuid,text,text,timestamptz) to authenticated;
+
+-- Delegation records are separate from honorific church titles. No role automatically grants privileges.
+create table if not exists public.cc_staff_delegations (
+ id uuid primary key default gen_random_uuid(),
+ user_id uuid not null references auth.users(id) on delete cascade,
+ permission text not null check(permission in ('membership_view','membership_manage','ministry_view','ministry_manage','events_manage','announcements_manage','trustees_view')),
+ granted_by uuid not null references auth.users(id),
+ created_at timestamptz not null default now(),
+ unique(user_id,permission)
+);
+alter table public.cc_staff_delegations enable row level security;
+drop policy if exists cc_delegations_admin_read on public.cc_staff_delegations;
+create policy cc_delegations_admin_read on public.cc_staff_delegations for select to authenticated using(public.cc_is_admin() or user_id=auth.uid());
+revoke insert,update,delete on public.cc_staff_delegations from anon,authenticated;
+create or replace function public.cc_set_staff_delegation(p_user_id uuid,p_permission text,p_enabled boolean)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if p_permission not in ('membership_view','membership_manage','ministry_view','ministry_manage','events_manage','announcements_manage','trustees_view') then raise exception 'Unknown permission'; end if;
+ if not exists(select 1 from public.member_profiles where user_id=p_user_id and approved=true) then raise exception 'Select an approved registered member'; end if;
+ if p_enabled then
+  insert into public.cc_staff_delegations(user_id,permission,granted_by) values(p_user_id,p_permission,auth.uid()) on conflict(user_id,permission) do nothing;
+ else
+  delete from public.cc_staff_delegations where user_id=p_user_id and permission=p_permission;
+ end if;
+end $$;
+revoke all on function public.cc_set_staff_delegation(uuid,text,boolean) from public;
+grant execute on function public.cc_set_staff_delegation(uuid,text,boolean) to authenticated;
+-- Delegations are recorded but MUST be enforced in each module's RLS before delegated users receive access.
+
+-- ===== messaging-migration.sql =====
+-- Run after phase4-migration.sql. Per-user read markers; existing RLS still applies.
+create table if not exists public.conversation_read_states (
+ conversation_id uuid not null references public.conversations(id) on delete cascade,
+ user_id uuid not null references auth.users(id) on delete cascade,
+ last_read_at timestamptz not null default now(),
+ primary key(conversation_id,user_id));
+alter table public.conversation_read_states enable row level security;
+drop policy if exists "read own markers" on public.conversation_read_states;
+create policy "read own markers" on public.conversation_read_states for select to authenticated using(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid()));
+drop policy if exists "insert own markers" on public.conversation_read_states;
+create policy "insert own markers" on public.conversation_read_states for insert to authenticated with check(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid()));
+drop policy if exists "update own markers" on public.conversation_read_states;
+create policy "update own markers" on public.conversation_read_states for update to authenticated using(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid())) with check(user_id=auth.uid() and public.can_read_conversation(conversation_id,auth.uid()));
+create or replace function public.my_conversation_unread_counts()
+returns table(conversation_id uuid,unread_count bigint)
+language sql stable security invoker set search_path=''
+as $$
+ with accessible as (select c.id from public.conversations c where public.can_read_conversation(c.id,auth.uid()))
+ select a.id,count(m.conversation_id)::bigint from accessible a
+ left join public.conversation_read_states r on r.conversation_id=a.id and r.user_id=auth.uid()
+ left join public.messages m on m.conversation_id=a.id and m.sender_id<>auth.uid() and m.created_at>coalesce(r.last_read_at,'1970-01-01'::timestamptz)
+ group by a.id
+$$;
+revoke all on function public.my_conversation_unread_counts() from public;
+grant execute on function public.my_conversation_unread_counts() to authenticated;
+
+-- ===== phase5-website-migration.sql =====
+-- Phase 5: single-church website content editor. Run after membership-migration.sql.
+-- IMPORTANT: current Church Connect schema is single-church; this table is NOT tenant-isolated.
+create table if not exists public.cc_website_content (
+  id integer primary key check(id=1),
+  enabled boolean not null default true,
+  published jsonb not null default '{}'::jsonb,
+  draft jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  published_at timestamptz
+);
+alter table public.cc_website_content enable row level security;
+drop policy if exists cc_website_public_read on public.cc_website_content;
+create policy cc_website_public_read on public.cc_website_content for select to anon, authenticated using(true);
+-- Public SELECT can see drafts in the table; therefore block direct table SELECT and expose only safe published fields through a view.
+drop policy if exists cc_website_public_read on public.cc_website_content;
+drop policy if exists cc_website_admin_read on public.cc_website_content;
+create policy cc_website_admin_read on public.cc_website_content for select to authenticated using(public.cc_is_admin());
+revoke all on public.cc_website_content from anon, authenticated;
+grant select on public.cc_website_content to authenticated;
+create or replace function public.cc_public_website()
+returns jsonb language sql stable security definer set search_path='' as $$
+  select case when enabled then published else jsonb_build_object('enabled',false) end
+  from public.cc_website_content where id=1;
+$$;
+revoke all on function public.cc_public_website() from public;
+grant execute on function public.cc_public_website() to anon, authenticated;
+create or replace function public.cc_save_website_draft(p_content jsonb)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if jsonb_typeof(p_content) <> 'object' or pg_column_size(p_content)>30000 then raise exception 'Invalid or oversized content'; end if;
+ insert into public.cc_website_content(id,draft) values(1,p_content)
+ on conflict(id) do update set draft=excluded.draft,updated_at=now();
+end $$;
+create or replace function public.cc_publish_website()
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ update public.cc_website_content set published=draft,published_at=now(),updated_at=now() where id=1;
+ if not found then raise exception 'Save a draft first'; end if;
+end $$;
+create or replace function public.cc_toggle_website(p_enabled boolean)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ insert into public.cc_website_content(id,enabled) values(1,p_enabled)
+ on conflict(id) do update set enabled=excluded.enabled,updated_at=now();
+end $$;
+revoke all on function public.cc_save_website_draft(jsonb) from public;
+revoke all on function public.cc_publish_website() from public;
+revoke all on function public.cc_toggle_website(boolean) from public;
+grant execute on function public.cc_save_website_draft(jsonb) to authenticated;
+grant execute on function public.cc_publish_website() to authenticated;
+grant execute on function public.cc_toggle_website(boolean) to authenticated;
+
+-- ===== phase8-media-migration.sql =====
+-- Run once in Supabase SQL editor. Uses the existing church_admins authorization table.
+insert into storage.buckets (id,name,public,file_size_limit,allowed_mime_types)
+values ('church-media','church-media',true,8388608,ARRAY['image/png','image/jpeg','image/webp'])
+on conflict (id) do update set file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+
+drop policy if exists "church_media_admin_upload" on storage.objects;
+create policy "church_media_admin_upload" on storage.objects for insert to authenticated
+with check (bucket_id='church-media' and (storage.foldername(name))[1]=auth.uid()::text and exists(select 1 from public.church_admins a where a.user_id=auth.uid()));
+
+drop policy if exists "church_media_public_read" on storage.objects;
+create policy "church_media_public_read" on storage.objects for select to public using (bucket_id='church-media');
+
+-- ===== phase10-sms-migration.sql =====
+-- Phase 10: private SMS consent, no third-party SMS provider needed for phone handoff.
+create table if not exists public.member_sms_preferences (
+ user_id uuid primary key references auth.users(id) on delete cascade,
+ phone text, opted_in boolean not null default false, has_app boolean not null default true,
+ updated_at timestamptz not null default now(),
+ constraint sms_phone_format check (phone is null or phone ~ '^\+[1-9][0-9]{7,14}$'),
+ constraint sms_opt_in_requires_phone check (not opted_in or phone is not null));
+alter table public.member_sms_preferences enable row level security;
+revoke all on public.member_sms_preferences from anon;
+grant select,insert,update on public.member_sms_preferences to authenticated;
+drop policy if exists sms_read_self on public.member_sms_preferences;
+create policy sms_read_self on public.member_sms_preferences for select to authenticated using(user_id=auth.uid());
+drop policy if exists sms_insert_self on public.member_sms_preferences;
+create policy sms_insert_self on public.member_sms_preferences for insert to authenticated with check(user_id=auth.uid());
+drop policy if exists sms_update_self on public.member_sms_preferences;
+create policy sms_update_self on public.member_sms_preferences for update to authenticated using(user_id=auth.uid()) with check(user_id=auth.uid());
+-- SECURITY DEFINER allows controlled access to opted-in phone numbers only for a conversation's authorized participants.
+create or replace function public.cc_phone_sms_recipients(p_conversation_id uuid,p_without_app boolean default true)
+returns table(phone text) language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.can_read_conversation(p_conversation_id,auth.uid()) then
+  raise exception 'Not authorized for this conversation';
+ end if;
+ return query
+ select distinct sp.phone from public.member_sms_preferences sp
+ join public.conversation_members cm on cm.user_id=sp.user_id and cm.conversation_id=p_conversation_id
+ join public.member_profiles mp on mp.user_id=sp.user_id and mp.approved=true
+ where sp.opted_in and sp.phone is not null and sp.user_id<>auth.uid()
+ and (not p_without_app or not sp.has_app);
+end $$;
+revoke all on function public.cc_phone_sms_recipients(uuid,boolean) from public;
+grant execute on function public.cc_phone_sms_recipients(uuid,boolean) to authenticated;
+
+-- ===== phase11-push-migration.sql =====
+-- Run in Supabase SQL Editor after messaging-migration.sql.
+create table if not exists public.member_push_subscriptions (
+ id bigint generated always as identity primary key,
+ user_id uuid not null references auth.users(id) on delete cascade,
+ endpoint text not null unique,
+ p256dh text not null,
+ auth text not null,
+ user_agent text,
+ created_at timestamptz not null default now()
+);
+create index if not exists push_user_idx on public.member_push_subscriptions(user_id);
+alter table public.member_push_subscriptions enable row level security;
+revoke all on public.member_push_subscriptions from anon;
+grant select,insert,update,delete on public.member_push_subscriptions to authenticated;
+drop policy if exists push_self_select on public.member_push_subscriptions;
+create policy push_self_select on public.member_push_subscriptions for select to authenticated using(user_id=auth.uid());
+drop policy if exists push_self_insert on public.member_push_subscriptions;
+create policy push_self_insert on public.member_push_subscriptions for insert to authenticated with check(user_id=auth.uid() and exists(select 1 from public.member_profiles p where p.user_id=auth.uid() and p.approved=true));
+drop policy if exists push_self_update on public.member_push_subscriptions;
+create policy push_self_update on public.member_push_subscriptions for update to authenticated using(user_id=auth.uid()) with check(user_id=auth.uid());
+drop policy if exists push_self_delete on public.member_push_subscriptions;
+create policy push_self_delete on public.member_push_subscriptions for delete to authenticated using(user_id=auth.uid());
+-- service_role can read all subscriptions via RLS bypass. Never expose that key in client files.
+
+-- ===== phase12-hardening-migration.sql =====
+-- Phase 12 hardening. Run LAST, after phase11-push-migration.sql. Safe to re-run.
+
+-- 1. Staff-entered directory data is admin-only; make that explicit instead of relying on RLS alone.
+revoke all on public.cc_directory_members from anon;
+revoke all on public.cc_directory_ministries from anon;
+revoke all on public.cc_staff_delegations from anon;
+revoke all on public.member_sms_preferences from anon;
+grant select on public.cc_directory_members to authenticated;
+grant select on public.cc_directory_ministries to authenticated;
+
+-- 2. Push idempotency: Supabase webhooks can retry, so record each message once and skip repeats.
+create table if not exists public.cc_push_deliveries (
+ message_id uuid primary key,
+ created_at timestamptz not null default now()
+);
+alter table public.cc_push_deliveries enable row level security;
+revoke all on public.cc_push_deliveries from anon, authenticated;
+-- No policies: only the Edge Function (service_role) reads or writes this table.
+
+-- 3. Phone numbers of staff-entered members (no app account) for the text handoff.
+-- Only administrators and leaders of the conversation's ministry receive them, and only for members who consented.
+create or replace function public.cc_directory_sms_recipients(p_conversation_id uuid)
+returns table(phone text) language plpgsql security definer set search_path='' as $$
+declare v_ministry uuid;
+begin
+ if auth.uid() is null or not public.can_read_conversation(p_conversation_id,auth.uid()) then
+  raise exception 'Not authorized for this conversation';
+ end if;
+ select c.ministry_id into v_ministry from public.conversations c where c.id=p_conversation_id and c.kind='ministry';
+ if v_ministry is null then return; end if;
+ if not (public.cc_is_admin() or exists(select 1 from public.ministry_members m where m.ministry_id=v_ministry and m.user_id=auth.uid() and m.is_leader)) then
+  raise exception 'Only administrators and ministry leaders can text staff-entered members';
+ end if;
+ return query
+ select distinct n.p from (
+  select case
+   when length(regexp_replace(d.phone,'\D','','g'))=10 then '+1'||regexp_replace(d.phone,'\D','','g')
+   when length(regexp_replace(d.phone,'\D','','g'))=11 and regexp_replace(d.phone,'\D','','g') like '1%' then '+'||regexp_replace(d.phone,'\D','','g')
+   when d.phone like '+%' and length(regexp_replace(d.phone,'\D','','g')) between 8 and 15 then '+'||regexp_replace(d.phone,'\D','','g')
+  end as p
+  from public.cc_directory_members d
+  join public.cc_directory_ministries dm on dm.member_id=d.id and dm.ministry_id=v_ministry
+  where d.active and d.sms_consent and d.phone is not null
+ ) n where n.p is not null;
+end $$;
+revoke all on function public.cc_directory_sms_recipients(uuid) from public;
+grant execute on function public.cc_directory_sms_recipients(uuid) to authenticated;
+
+-- 4. Least privilege. The live database exported on 2026-10-20 showed the public (anon) role holding full rights, including TRUNCATE,
+-- on every table. Row-level security already blocks reads and writes, but TRUNCATE ignores it, so remove what is not needed.
+do $$
+declare t text;
+begin
+ for t in select tablename from pg_tables where schemaname='public' and tablename<>'churches' loop
+  execute format('revoke all on public.%I from anon',t);
+  execute format('revoke truncate,references,trigger on public.%I from authenticated',t);
+ end loop;
+end $$;
+-- The public website only needs to read published events, announcements and active giving links.
+grant select on public.church_events, public.church_announcements, public.church_giving_links to anon;
+do $$ begin if to_regclass('public.churches') is not null then execute 'grant select on public.churches to anon'; end if; end $$;
+
+-- ===== multichurch-migration.sql =====
+-- Phase 11: multi-church accounts, subscriptions and data separation.
+-- Run AFTER phase12-hardening-migration.sql. Safe to re-run.
+-- Built from an export of the live database structure (2026-10-20). Existing data is kept and assigned to one default church.
+--
+-- How separation works:
+--   * every church-owned table gets church_id; a person belongs to one church (church_admins / member_profiles).
+--   * RESTRICTIVE row-level policies are ANDed with the policies that already exist, so nothing about the old rules is loosened.
+--   * every administrator function that takes an id from the caller now confirms that id belongs to the caller's church.
+
+-- ===== 1. Churches, subscriptions, platform owners ===================================================
+create table if not exists public.churches (
+ id uuid primary key default gen_random_uuid(),
+ name text not null check (length(trim(name)) between 2 and 150),
+ slug text not null unique check (slug ~ '^[a-z0-9-]{2,50}$'),
+ created_at timestamptz not null default now()
+);
+create table if not exists public.church_subscriptions (
+ church_id uuid primary key references public.churches(id) on delete cascade,
+ plan text not null default 'trial',
+ status text not null default 'trialing' check (status in ('trialing','active','past_due','canceled')),
+ trial_ends_at timestamptz,
+ current_period_end timestamptz,
+ updated_at timestamptz not null default now()
+);
+create table if not exists public.cc_platform_admins (user_id uuid primary key references auth.users(id) on delete cascade);
+alter table public.churches enable row level security;
+alter table public.church_subscriptions enable row level security;
+alter table public.cc_platform_admins enable row level security;
+
+insert into public.churches(name,slug) select 'Your Church','default' where not exists(select 1 from public.churches);
+insert into public.church_subscriptions(church_id,plan,status)
+ select id,'founder','active' from public.churches c where not exists(select 1 from public.church_subscriptions s where s.church_id=c.id);
+
+-- ===== 2. church_id on every church-owned table =====================================================
+do $$
+declare t text; v_default uuid;
+begin
+ select id into v_default from public.churches order by created_at limit 1;
+ foreach t in array array['church_admins','member_profiles','member_roles','ministries','conversations','church_events','church_announcements',
+   'church_giving_links','church_settings','church_organization_preferences','donation_records','cc_directory_members','cc_website_content',
+   'member_updates','cc_staff_delegations'] loop
+  execute format('alter table public.%I add column if not exists church_id uuid references public.churches(id) on delete cascade',t);
+  execute format('update public.%I set church_id=%L where church_id is null',t,v_default);
+  execute format('alter table public.%I alter column church_id set not null',t);
+  execute format('create index if not exists %I on public.%I(church_id)','cc_'||t||'_church_idx',t);
+ end loop;
+end $$;
+
+-- ===== 3. Who is the caller's church? ================================================================
+create or replace function public.cc_my_church_id() returns uuid language sql stable security definer set search_path='' as $$
+ select coalesce(
+  (select church_id from public.church_admins where user_id=(select auth.uid()) limit 1),
+  (select church_id from public.member_profiles where user_id=(select auth.uid()) limit 1));
+$$;
+revoke all on function public.cc_my_church_id() from public;
+grant execute on function public.cc_my_church_id() to authenticated;
+
+create or replace function public.cc_same_church_user(u uuid) returns boolean language sql stable security definer set search_path='' as $$
+ select exists(select 1 from public.member_profiles p where p.user_id=u and p.church_id=public.cc_my_church_id());
+$$;
+revoke all on function public.cc_same_church_user(uuid) from public;
+grant execute on function public.cc_same_church_user(uuid) to authenticated;
+
+create or replace function public.cc_church_writable(p_church uuid) returns boolean language sql stable security definer set search_path='' as $$
+ select exists(select 1 from public.church_subscriptions s where s.church_id=p_church and s.status in ('trialing','active')
+  and (s.status<>'trialing' or s.trial_ends_at is null or s.trial_ends_at>now()));
+$$;
+revoke all on function public.cc_church_writable(uuid) from public;
+grant execute on function public.cc_church_writable(uuid) to authenticated;
+
+create or replace function public.cc_is_platform_admin() returns boolean language sql stable security definer set search_path='' as $$
+ select exists(select 1 from public.cc_platform_admins where user_id=(select auth.uid()));
+$$;
+revoke all on function public.cc_is_platform_admin() from public;
+grant execute on function public.cc_is_platform_admin() to authenticated;
+
+-- New rows default to the caller's church.
+do $$
+declare t text;
+begin
+ foreach t in array array['church_admins','member_profiles','member_roles','ministries','conversations','church_events','church_announcements',
+   'church_giving_links','church_settings','church_organization_preferences','donation_records','cc_directory_members','cc_website_content',
+   'member_updates','cc_staff_delegations'] loop
+  execute format('alter table public.%I alter column church_id set default public.cc_my_church_id()',t);
+ end loop;
+end $$;
+
+-- One-row-per-church settings tables: the old single-row key becomes (church_id, id).
+do $$
+declare t text; c text;
+begin
+ foreach t in array array['church_settings','church_organization_preferences','cc_website_content'] loop
+  select conname into c from pg_constraint where conrelid=('public.'||t)::regclass and contype='p' and array_length(conkey,1)=1;
+  if c is not null then
+   execute format('alter table public.%I drop constraint %I',t,c);
+   execute format('alter table public.%I add primary key (church_id,id)',t);
+  end if;
+ end loop;
+end $$;
+-- Every church gets its settings rows.
+insert into public.church_settings(church_id,id) select c.id,true from public.churches c on conflict do nothing;
+insert into public.church_organization_preferences(church_id,id) select c.id,true from public.churches c on conflict do nothing;
+
+-- ===== 4. Restrictive row-level policies ==============================================================
+-- Churches and subscriptions
+drop policy if exists cc_churches_read on public.churches;
+create policy cc_churches_read on public.churches for select to anon, authenticated using (true);
+drop policy if exists cc_subscription_read on public.church_subscriptions;
+create policy cc_subscription_read on public.church_subscriptions for select to authenticated
+ using ((church_id=public.cc_my_church_id() and public.cc_is_admin()) or public.cc_is_platform_admin());
+revoke insert,update,delete,truncate on public.churches, public.church_subscriptions, public.cc_platform_admins from anon, authenticated;
+revoke all on public.cc_platform_admins from anon, authenticated;
+grant select on public.churches to anon, authenticated;
+grant select on public.church_subscriptions to authenticated;
+
+-- Tables everybody can read the published part of: other churches' published rows stay visible to the public website only.
+do $$
+declare t text; flag text;
+begin
+ for t,flag in select * from (values ('church_events','published'),('church_announcements','published'),('church_giving_links','active')) v(t,f) loop
+  execute format('drop policy if exists cc_tenant_select on public.%I',t);
+  execute format('create policy cc_tenant_select on public.%I as restrictive for select to authenticated using (%I or church_id=public.cc_my_church_id())',t,flag);
+  execute format('drop policy if exists cc_tenant_insert on public.%I',t);
+  execute format('create policy cc_tenant_insert on public.%I as restrictive for insert to authenticated with check (church_id=public.cc_my_church_id() and public.cc_church_writable(church_id))',t);
+  execute format('drop policy if exists cc_tenant_update on public.%I',t);
+  execute format('create policy cc_tenant_update on public.%I as restrictive for update to authenticated using (church_id=public.cc_my_church_id()) with check (church_id=public.cc_my_church_id() and public.cc_church_writable(church_id))',t);
+  execute format('drop policy if exists cc_tenant_delete on public.%I',t);
+  execute format('create policy cc_tenant_delete on public.%I as restrictive for delete to authenticated using (church_id=public.cc_my_church_id())',t);
+ end loop;
+end $$;
+
+-- Private tables: a signed-in person only ever sees and writes their own church's rows.
+do $$
+declare t text;
+begin
+ foreach t in array array['church_admins','member_profiles','member_roles','ministries','conversations','church_settings','church_organization_preferences',
+   'donation_records','cc_directory_members','cc_website_content','member_updates','cc_staff_delegations'] loop
+  execute format('drop policy if exists cc_tenant_all on public.%I',t);
+  execute format('create policy cc_tenant_all on public.%I as restrictive for all to authenticated using (church_id=public.cc_my_church_id()) with check (church_id=public.cc_my_church_id())',t);
+ end loop;
+end $$;
+
+-- A church whose subscription lapsed becomes read-only for the content that costs money to host.
+do $$
+declare t text;
+begin
+ foreach t in array array['ministries','member_updates','conversations','cc_directory_members'] loop
+  execute format('drop policy if exists cc_subscription_insert on public.%I',t);
+  execute format('create policy cc_subscription_insert on public.%I as restrictive for insert to authenticated with check (public.cc_church_writable(church_id))',t);
+  execute format('drop policy if exists cc_subscription_update on public.%I',t);
+  execute format('create policy cc_subscription_update on public.%I as restrictive for update to authenticated using (true) with check (public.cc_church_writable(church_id))',t);
+ end loop;
+end $$;
+
+-- Child tables inherit their church from the parent row.
+drop policy if exists cc_tenant_all on public.ministry_members;
+create policy cc_tenant_all on public.ministry_members as restrictive for all to authenticated
+ using (exists(select 1 from public.ministries m where m.id=ministry_id and m.church_id=public.cc_my_church_id()))
+ with check (exists(select 1 from public.ministries m where m.id=ministry_id and m.church_id=public.cc_my_church_id()));
+drop policy if exists cc_tenant_all on public.ministry_activities;
+create policy cc_tenant_all on public.ministry_activities as restrictive for all to authenticated
+ using (exists(select 1 from public.ministries m where m.id=ministry_id and m.church_id=public.cc_my_church_id()))
+ with check (exists(select 1 from public.ministries m where m.id=ministry_id and m.church_id=public.cc_my_church_id()));
+drop policy if exists cc_tenant_all on public.ministry_join_requests;
+create policy cc_tenant_all on public.ministry_join_requests as restrictive for all to authenticated
+ using (exists(select 1 from public.ministries m where m.id=ministry_id and m.church_id=public.cc_my_church_id()))
+ with check (exists(select 1 from public.ministries m where m.id=ministry_id and m.church_id=public.cc_my_church_id()));
+drop policy if exists cc_tenant_all on public.cc_directory_ministries;
+create policy cc_tenant_all on public.cc_directory_ministries as restrictive for all to authenticated
+ using (exists(select 1 from public.cc_directory_members d where d.id=member_id and d.church_id=public.cc_my_church_id()))
+ with check (exists(select 1 from public.cc_directory_members d where d.id=member_id and d.church_id=public.cc_my_church_id()));
+drop policy if exists cc_tenant_all on public.conversation_members;
+create policy cc_tenant_all on public.conversation_members as restrictive for all to authenticated
+ using (exists(select 1 from public.conversations c where c.id=conversation_id and c.church_id=public.cc_my_church_id()))
+ with check (exists(select 1 from public.conversations c where c.id=conversation_id and c.church_id=public.cc_my_church_id()));
+drop policy if exists cc_tenant_all on public.messages;
+create policy cc_tenant_all on public.messages as restrictive for all to authenticated
+ using (exists(select 1 from public.conversations c where c.id=conversation_id and c.church_id=public.cc_my_church_id()))
+ with check (exists(select 1 from public.conversations c where c.id=conversation_id and c.church_id=public.cc_my_church_id()));
+drop policy if exists cc_subscription_insert on public.messages;
+create policy cc_subscription_insert on public.messages as restrictive for insert to authenticated
+ with check (exists(select 1 from public.conversations c where c.id=conversation_id and public.cc_church_writable(c.church_id)));
+drop policy if exists cc_tenant_all on public.member_church_titles;
+create policy cc_tenant_all on public.member_church_titles as restrictive for all to authenticated
+ using (public.cc_same_church_user(user_id)) with check (public.cc_same_church_user(user_id));
+
+-- ===== 5. Administrator functions: act only inside the caller's own church ============================
+create or replace function public.cc_manage_member(
+ p_user_id uuid, p_action text, p_ministry_id uuid default null, p_leader boolean default false
+) returns void language plpgsql security definer set search_path = '' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Not authorized'; end if;
+ if not public.cc_same_church_user(p_user_id) then raise exception 'Member not found'; end if;
+ if p_ministry_id is not null and not exists(select 1 from public.ministries where id=p_ministry_id and church_id=public.cc_my_church_id()) then raise exception 'Ministry not found'; end if;
+ if p_action='approve_member' then
+  update public.member_profiles set approved=true where user_id=p_user_id;
+ elsif p_action='suspend_member' then
+  if p_user_id=auth.uid() then raise exception 'You cannot suspend yourself'; end if;
+  update public.member_profiles set approved=false where user_id=p_user_id;
+  delete from public.ministry_members where user_id=p_user_id;
+ elsif p_action='approve_ministry' then
+  if p_ministry_id is null then raise exception 'Ministry required'; end if;
+  if not exists(select 1 from public.member_profiles where user_id=p_user_id and approved=true) then raise exception 'Approve member first'; end if;
+  insert into public.ministry_members(ministry_id,user_id,is_leader) values(p_ministry_id,p_user_id,false) on conflict(ministry_id,user_id) do nothing;
+  update public.ministry_join_requests set status='approved' where ministry_id=p_ministry_id and user_id=p_user_id;
+ elsif p_action='reject_ministry' then
+  update public.ministry_join_requests set status='rejected' where ministry_id=p_ministry_id and user_id=p_user_id and status='pending';
+ elsif p_action='remove_ministry' then
+  delete from public.ministry_members where ministry_id=p_ministry_id and user_id=p_user_id;
+  delete from public.ministry_join_requests where ministry_id=p_ministry_id and user_id=p_user_id;
+ elsif p_action='set_leader' then
+  update public.ministry_members set is_leader=p_leader where ministry_id=p_ministry_id and user_id=p_user_id;
+  if not found then raise exception 'Approve ministry membership first'; end if;
+ else raise exception 'Unknown action'; end if;
+end; $$;
+
+create or replace function public.cc_verify_titles(p_user_id uuid, p_titles text[]) returns void
+language plpgsql security definer set search_path = '' as $$
+declare permitted text[] := array['Pastor','First Lady','Minister','Elder','Missionary','Mother','Evangelist','Deacon','Deaconess'];
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Not authorized'; end if;
+ if not public.cc_same_church_user(p_user_id) then raise exception 'Member not found'; end if;
+ if exists(select 1 from unnest(coalesce(p_titles,'{}'::text[])) t where not t=any(permitted)) then raise exception 'Invalid title'; end if;
+ insert into public.member_church_titles(user_id,verified_titles) values(p_user_id,coalesce(p_titles,'{}'::text[]))
+ on conflict(user_id) do update set verified_titles=excluded.verified_titles;
+end; $$;
+
+create or replace function public.cc_set_staff_delegation(p_user_id uuid,p_permission text,p_enabled boolean)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if p_permission not in ('membership_view','membership_manage','ministry_view','ministry_manage','events_manage','announcements_manage','trustees_view') then raise exception 'Unknown permission'; end if;
+ if not exists(select 1 from public.member_profiles where user_id=p_user_id and approved=true and church_id=public.cc_my_church_id()) then raise exception 'Select an approved registered member'; end if;
+ if p_enabled then
+  insert into public.cc_staff_delegations(user_id,permission,granted_by,church_id) values(p_user_id,p_permission,auth.uid(),public.cc_my_church_id()) on conflict(user_id,permission) do nothing;
+ else
+  delete from public.cc_staff_delegations where user_id=p_user_id and permission=p_permission and church_id=public.cc_my_church_id();
+ end if;
+end $$;
+
+create or replace function public.cc_save_directory_member(
+ p_id uuid, p_name text, p_phone text, p_email text, p_courtesy text,
+ p_titles text[], p_primary text, p_notes text, p_sms_consent boolean,
+ p_ministry_ids uuid[], p_active boolean default true
+) returns uuid language plpgsql security definer set search_path='' as $$
+declare v_id uuid; v_church uuid:=public.cc_my_church_id(); allowed text[]:=array['Pastor','First Lady','Minister','Elder','Missionary','Mother','Evangelist','Deacon','Deaconess'];
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not public.cc_church_writable(public.cc_my_church_id()) then raise exception 'This church''s subscription is not active'; end if;
+ if length(trim(coalesce(p_name,''))) not between 2 and 150 then raise exception 'Name must be 2–150 characters'; end if;
+ if p_courtesy not in ('Bro.','Sis.') then raise exception 'Invalid courtesy title'; end if;
+ if exists(select 1 from unnest(coalesce(p_titles,'{}'::text[])) t where not t=any(allowed)) then raise exception 'Invalid church title'; end if;
+ if p_primary is not null and not p_primary=any(coalesce(p_titles,'{}'::text[])) then raise exception 'Primary title must be selected'; end if;
+ if length(coalesce(p_notes,''))>2000 then raise exception 'Notes too long'; end if;
+ if length(coalesce(p_phone,''))>30 or length(coalesce(p_email,''))>254 then raise exception 'Contact information too long'; end if;
+ if exists(select 1 from unnest(coalesce(p_ministry_ids,'{}'::uuid[])) m where not exists(select 1 from public.ministries where id=m and church_id=v_church)) then raise exception 'Invalid ministry'; end if;
+ if p_id is null then
+  insert into public.cc_directory_members(church_id,full_name,phone,email,courtesy_title,church_titles,primary_title,notes,sms_consent,active)
+  values(v_church,trim(p_name),nullif(trim(coalesce(p_phone,'')),''),nullif(trim(coalesce(p_email,'')),''),p_courtesy,coalesce(p_titles,'{}'::text[]),p_primary,nullif(trim(coalesce(p_notes,'')),''),coalesce(p_sms_consent,false),coalesce(p_active,true)) returning id into v_id;
+ else
+  update public.cc_directory_members set full_name=trim(p_name),phone=nullif(trim(coalesce(p_phone,'')),''),email=nullif(trim(coalesce(p_email,'')),''),courtesy_title=p_courtesy,church_titles=coalesce(p_titles,'{}'::text[]),primary_title=p_primary,notes=nullif(trim(coalesce(p_notes,'')),''),sms_consent=coalesce(p_sms_consent,false),active=coalesce(p_active,true),updated_at=now() where id=p_id and church_id=v_church returning id into v_id;
+  if v_id is null then raise exception 'Directory member not found'; end if;
+ end if;
+ delete from public.cc_directory_ministries where member_id=v_id and ministry_id<>all(coalesce(p_ministry_ids,'{}'::uuid[]));
+ insert into public.cc_directory_ministries(member_id,ministry_id)
+ select v_id,m from (select distinct unnest(coalesce(p_ministry_ids,'{}'::uuid[])) m) x on conflict do nothing;
+ return v_id;
+end $$;
+
+create or replace function public.cc_manage_ministry(p_id uuid,p_name text,p_action text default 'save')
+returns uuid language plpgsql security definer set search_path='' as $$
+declare v_id uuid; v_church uuid:=public.cc_my_church_id();
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not public.cc_church_writable(public.cc_my_church_id()) then raise exception 'This church''s subscription is not active'; end if;
+ if p_action='save' then
+  if length(trim(coalesce(p_name,''))) not between 2 and 100 then raise exception 'Name must be 2–100 characters'; end if;
+  if p_id is null then insert into public.ministries(church_id,name) values(v_church,trim(p_name)) returning id into v_id;
+  else update public.ministries set name=trim(p_name) where id=p_id and church_id=v_church returning id into v_id;
+  end if;
+  if v_id is null then raise exception 'Ministry not found'; end if;
+  return v_id;
+ else raise exception 'Unsupported ministry action'; end if;
+end $$;
+
+create or replace function public.cc_create_ministry_activity(p_ministry_id uuid,p_title text,p_details text,p_starts_at timestamptz)
+returns uuid language plpgsql security definer set search_path='' as $$
+declare v_id uuid;
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not public.cc_church_writable(public.cc_my_church_id()) then raise exception 'This church''s subscription is not active'; end if;
+ if not exists(select 1 from public.ministries where id=p_ministry_id and church_id=public.cc_my_church_id()) then raise exception 'Ministry not found'; end if;
+ if length(trim(coalesce(p_title,''))) not between 2 and 180 then raise exception 'Activity title must be 2–180 characters'; end if;
+ if length(coalesce(p_details,''))>2000 then raise exception 'Details too long'; end if;
+ if p_starts_at is null then raise exception 'Start date is required'; end if;
+ insert into public.ministry_activities(ministry_id,title,details,starts_at)
+ values(p_ministry_id,trim(p_title),nullif(trim(coalesce(p_details,'')),''),p_starts_at) returning id into v_id;
+ return v_id;
+end $$;
+
+create or replace function public.cc_set_directory_ministry_leader(p_member_id uuid,p_ministry_id uuid,p_is_leader boolean)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not exists(select 1 from public.cc_directory_members where id=p_member_id and church_id=public.cc_my_church_id())
+  or not exists(select 1 from public.ministries where id=p_ministry_id and church_id=public.cc_my_church_id()) then raise exception 'Directory assignment not found'; end if;
+ update public.cc_directory_ministries set is_leader=coalesce(p_is_leader,false) where member_id=p_member_id and ministry_id=p_ministry_id;
+ if not found then raise exception 'Directory assignment not found'; end if;
+end $$;
+
+-- Website content: one row per church.
+create or replace function public.cc_save_website_draft(p_content jsonb) returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not public.cc_church_writable(public.cc_my_church_id()) then raise exception 'This church''s subscription is not active'; end if;
+ if jsonb_typeof(p_content) <> 'object' or pg_column_size(p_content)>30000 then raise exception 'Invalid or oversized content'; end if;
+ insert into public.cc_website_content(church_id,id,draft) values(public.cc_my_church_id(),1,p_content)
+ on conflict(church_id,id) do update set draft=excluded.draft,updated_at=now();
+end $$;
+create or replace function public.cc_publish_website() returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not public.cc_church_writable(public.cc_my_church_id()) then raise exception 'This church''s subscription is not active'; end if;
+ update public.cc_website_content set published=draft,published_at=now(),updated_at=now() where id=1 and church_id=public.cc_my_church_id();
+ if not found then raise exception 'Save a draft first'; end if;
+end $$;
+create or replace function public.cc_toggle_website(p_enabled boolean) returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ insert into public.cc_website_content(church_id,id,enabled) values(public.cc_my_church_id(),1,p_enabled)
+ on conflict(church_id,id) do update set enabled=excluded.enabled,updated_at=now();
+end $$;
+-- Public site: pass the church id from config.js; with one church (or none given) it returns the oldest church's site.
+drop function if exists public.cc_public_website();
+create or replace function public.cc_public_website(p_church uuid default null) returns jsonb language sql stable security definer set search_path='' as $$
+ select case when enabled then published else jsonb_build_object('enabled',false) end
+ from public.cc_website_content where id=1 and church_id=coalesce(p_church,(select id from public.churches order by created_at limit 1));
+$$;
+revoke all on function public.cc_public_website(uuid) from public;
+grant execute on function public.cc_public_website(uuid) to anon, authenticated;
+
+create or replace function public.set_member_approval(u uuid, v boolean) returns void language plpgsql security definer set search_path='' as $$
+begin
+ if not public.has_church_role('administrator') then raise exception 'Not authorized'; end if;
+ if not public.cc_same_church_user(u) then raise exception 'Member not found'; end if;
+ update public.member_profiles set approved=v where user_id=u;
+end $$;
+
+create or replace function public.start_direct_chat(recipient uuid) returns uuid language plpgsql security definer set search_path='' as $$
+declare cid uuid; me uuid := auth.uid();
+begin
+ if me is null or recipient=me or not public.is_approved_member(me) or not public.is_approved_member(recipient) then raise exception 'Not authorized'; end if;
+ if not public.cc_same_church_user(recipient) then raise exception 'Recipient is not available'; end if;
+ if not public.cc_church_writable(public.cc_my_church_id()) then raise exception 'This church''s subscription is not active'; end if;
+ if not exists(select 1 from public.member_profiles where user_id=recipient and directory_visible=true) then raise exception 'Recipient is not available'; end if;
+ perform pg_advisory_xact_lock(hashtext(least(me::text,recipient::text)||greatest(me::text,recipient::text)));
+ select c.id into cid from public.conversations c join public.conversation_members a on a.conversation_id=c.id and a.user_id=me
+ join public.conversation_members b on b.conversation_id=c.id and b.user_id=recipient
+ where c.kind='direct' and (select count(*) from public.conversation_members x where x.conversation_id=c.id)=2 limit 1;
+ if cid is null then
+  insert into public.conversations(kind,church_id) values('direct',public.cc_my_church_id()) returning id into cid;
+  insert into public.conversation_members(conversation_id,user_id) values(cid,me),(cid,recipient);
+ end if;
+ return cid;
+end $$;
+
+-- Sign-up: the member picks (or the site config supplies) a church. With exactly one church it is chosen automatically.
+drop function if exists public.create_my_profile(text);
+create or replace function public.create_my_profile(n text, p_church uuid default null) returns void language plpgsql security definer set search_path='' as $$
+declare v uuid;
+begin
+ if auth.uid() is null then raise exception 'Sign in required'; end if;
+ v:=coalesce(p_church,(select id from public.churches where (select count(*) from public.churches)=1));
+ if v is null or not exists(select 1 from public.churches where id=v) then raise exception 'Choose a church to join'; end if;
+ if not public.cc_church_writable(v) then raise exception 'This church is not accepting new members right now'; end if;
+ insert into public.member_profiles(user_id,display_name,church_id) values(auth.uid(),left(trim(n),100),v) on conflict(user_id) do nothing;
+end $$;
+revoke all on function public.create_my_profile(text,uuid) from public;
+grant execute on function public.create_my_profile(text,uuid) to authenticated;
+
+-- ===== 6. Platform owner tools ========================================================================
+create or replace function public.cc_platform_create_church(p_name text,p_slug text,p_admin_user uuid) returns uuid language plpgsql security definer set search_path='' as $$
+declare v uuid;
+begin
+ if not public.cc_is_platform_admin() then raise exception 'Platform administrator access required'; end if;
+ insert into public.churches(name,slug) values(trim(p_name),lower(trim(p_slug))) returning id into v;
+ insert into public.church_subscriptions(church_id,plan,status,trial_ends_at) values(v,'trial','trialing',now()+interval '30 days');
+ insert into public.church_settings(church_id,id) values(v,true);
+ insert into public.church_organization_preferences(church_id,id) values(v,true);
+ insert into public.member_profiles(user_id,display_name,approved,church_id) values(p_admin_user,'Church administrator',true,v)
+  on conflict(user_id) do update set church_id=v,approved=true;
+ insert into public.church_admins(user_id,church_id) values(p_admin_user,v) on conflict(user_id) do update set church_id=v;
+ return v;
+end $$;
+create or replace function public.cc_platform_set_subscription(p_church uuid,p_plan text,p_status text,p_period_end timestamptz default null) returns void language plpgsql security definer set search_path='' as $$
+begin
+ if not public.cc_is_platform_admin() then raise exception 'Platform administrator access required'; end if;
+ if p_status not in ('trialing','active','past_due','canceled') then raise exception 'Unknown status'; end if;
+ insert into public.church_subscriptions(church_id,plan,status,current_period_end) values(p_church,coalesce(p_plan,'trial'),p_status,p_period_end)
+ on conflict(church_id) do update set plan=excluded.plan,status=excluded.status,current_period_end=excluded.current_period_end,updated_at=now();
+end $$;
+revoke all on function public.cc_platform_create_church(text,text,uuid) from public;
+revoke all on function public.cc_platform_set_subscription(uuid,text,text,timestamptz) from public;
+grant execute on function public.cc_platform_create_church(text,text,uuid) to authenticated;
+grant execute on function public.cc_platform_set_subscription(uuid,text,text,timestamptz) to authenticated;
+
+-- ===== broadcast-migration.sql =====
+-- Church-wide broadcast. Run AFTER multichurch-migration.sql. Safe to re-run.
+-- Administrators and pastors write one message; every approved member of THEIR church sees it under Updates.
+-- Push notifications and the optional "text it too" step are handled by the app / Edge Function (see BROADCAST-SETUP.md).
+
+-- Who may broadcast: an approved member of the caller's church who is an administrator or a pastor.
+create or replace function public.cc_can_broadcast() returns boolean language sql stable security definer set search_path='' as $$
+ select auth.uid() is not null
+  and exists(select 1 from public.member_profiles p where p.user_id=auth.uid() and p.approved=true and p.church_id=public.cc_my_church_id())
+  and (public.has_church_role('administrator') or public.has_church_role('pastor'));
+$$;
+revoke all on function public.cc_can_broadcast() from public;
+grant execute on function public.cc_can_broadcast() to authenticated;
+
+create or replace function public.cc_send_broadcast(p_title text, p_body text) returns uuid language plpgsql security definer set search_path='' as $$
+declare v_id uuid; v_church uuid:=public.cc_my_church_id();
+begin
+ if not public.cc_can_broadcast() then raise exception 'Only administrators and pastors can send a church-wide broadcast'; end if;
+ if not public.cc_church_writable(v_church) then raise exception 'This church''s subscription is not active'; end if;
+ if length(trim(coalesce(p_title,''))) not between 2 and 120 then raise exception 'Title must be 2–120 characters'; end if;
+ if length(trim(coalesce(p_body,''))) not between 1 and 2000 then raise exception 'Message must be 1–2000 characters'; end if;
+ -- Abuse guard: a church-wide message goes to everyone, so cap how often it can be sent.
+ if (select count(*) from public.member_updates u where u.church_id=v_church and u.ministry_id is null and u.created_at>now()-interval '1 hour')>=10 then
+  raise exception 'Too many broadcasts in the last hour. Please wait before sending another.';
+ end if;
+ insert into public.member_updates(church_id,title,body,ministry_id,created_by)
+ values(v_church,trim(p_title),trim(p_body),null,auth.uid()) returning id into v_id;
+ return v_id;
+end $$;
+revoke all on function public.cc_send_broadcast(text,text) from public;
+grant execute on function public.cc_send_broadcast(text,text) to authenticated;
+
+-- Phone numbers to text for a broadcast: opted-in registered members plus staff-entered members who consented. Own church only.
+create or replace function public.cc_broadcast_sms_recipients(p_without_app boolean default true) returns table(phone text)
+language plpgsql security definer set search_path='' as $$
+declare v_church uuid:=public.cc_my_church_id();
+begin
+ if not public.cc_can_broadcast() then raise exception 'Only administrators and pastors can send a church-wide broadcast'; end if;
+ return query
+ select distinct n.p from (
+  select sp.phone as p
+  from public.member_sms_preferences sp
+  join public.member_profiles mp on mp.user_id=sp.user_id and mp.approved=true and mp.church_id=v_church
+  where sp.opted_in and sp.phone is not null and sp.user_id<>auth.uid() and (not p_without_app or not sp.has_app)
+  union all
+  select case
+   when length(regexp_replace(d.phone,'\D','','g'))=10 then '+1'||regexp_replace(d.phone,'\D','','g')
+   when length(regexp_replace(d.phone,'\D','','g'))=11 and regexp_replace(d.phone,'\D','','g') like '1%' then '+'||regexp_replace(d.phone,'\D','','g')
+   when d.phone like '+%' and length(regexp_replace(d.phone,'\D','','g')) between 8 and 15 then '+'||regexp_replace(d.phone,'\D','','g')
+  end
+  from public.cc_directory_members d
+  where d.church_id=v_church and d.active and d.sms_consent and d.phone is not null
+ ) n where n.p is not null;
+end $$;
+revoke all on function public.cc_broadcast_sms_recipients(boolean) from public;
+grant execute on function public.cc_broadcast_sms_recipients(boolean) to authenticated;
+
+-- ===== Pastor access ===================================================================================
+-- Lets an administrator give a registered member of their church the pastor role AND access to the administration pages
+-- (the admin pages let in anyone listed in church_admins). Removing it takes both away. Nobody can change their own access.
+create or replace function public.cc_member_access() returns table(user_id uuid,is_admin boolean,is_pastor boolean,is_me boolean)
+language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ return query
+ select p.user_id,
+  exists(select 1 from public.church_admins a where a.user_id=p.user_id),
+  exists(select 1 from public.member_roles r where r.user_id=p.user_id and r.role='pastor'),
+  p.user_id=auth.uid()
+ from public.member_profiles p where p.church_id=public.cc_my_church_id();
+end $$;
+revoke all on function public.cc_member_access() from public;
+grant execute on function public.cc_member_access() to authenticated;
+
+create or replace function public.cc_set_pastor_access(p_user_id uuid,p_enabled boolean) returns void
+language plpgsql security definer set search_path='' as $$
+declare v_church uuid:=public.cc_my_church_id();
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not public.cc_church_writable(v_church) then raise exception 'This church''s subscription is not active'; end if;
+ if p_user_id=auth.uid() then raise exception 'You cannot change your own access'; end if;
+ if not exists(select 1 from public.member_profiles where user_id=p_user_id and approved=true and church_id=v_church) then raise exception 'Select an approved member of your church'; end if;
+ if p_enabled then
+  insert into public.member_roles(user_id,role,church_id) select p_user_id,'pastor',v_church
+   where not exists(select 1 from public.member_roles where user_id=p_user_id and role='pastor');
+  insert into public.church_admins(user_id,church_id) select p_user_id,v_church
+   where not exists(select 1 from public.church_admins where user_id=p_user_id);
+ else
+  if not exists(select 1 from public.member_roles where user_id=p_user_id and role='pastor') then raise exception 'This person was not given pastor access here'; end if;
+  delete from public.member_roles where user_id=p_user_id and role='pastor';
+  delete from public.church_admins where user_id=p_user_id;
+ end if;
+end $$;
+revoke all on function public.cc_set_pastor_access(uuid,boolean) from public;
+grant execute on function public.cc_set_pastor_access(uuid,boolean) to authenticated;
+
+-- ===== events-sync-migration.sql =====
+-- Events from the church's existing website. Run AFTER broadcast-migration.sql. Safe to re-run.
+-- A church can point Church Connect at its website's events feed; the `sync-website-events` Edge Function reads that feed
+-- (read-only) and keeps matching rows in church_events up to date. Church Connect never writes to the website.
+
+alter table public.churches add column if not exists events_feed_url text;
+alter table public.churches add column if not exists events_timezone text not null default 'America/New_York';
+alter table public.churches add column if not exists events_synced_at timestamptz;
+alter table public.churches add column if not exists events_sync_status text;
+
+-- Rows that came from the website are marked so they can be refreshed without touching events typed in by hand.
+alter table public.church_events add column if not exists source text;
+alter table public.church_events add column if not exists external_id text;
+-- Not a partial index on purpose: the Edge Function upserts with ON CONFLICT (church_id, source, external_id).
+-- Hand-made events have NULL source/external_id, and NULLs never collide, so they are unaffected.
+create unique index if not exists church_events_website_uq on public.church_events(church_id, source, external_id);
+
+-- Administrators set (or clear) the feed address. Only a plain public https address is accepted.
+create or replace function public.cc_set_events_feed(p_url text, p_timezone text default null) returns void
+language plpgsql security definer set search_path='' as $$
+declare v_url text:=nullif(trim(coalesce(p_url,'')),''); v_host text;
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if v_url is not null then
+  if length(v_url)>500 or v_url !~* '^https://[a-z0-9.-]+(:[0-9]+)?(/[^\s]*)?$' then raise exception 'Use a full https:// web address'; end if;
+  v_host:=lower(substring(v_url from '^https://([^/:]+)'));
+  if v_host !~ '\.' or v_host ~ '^[0-9.]+$' or v_host in ('localhost') or v_host ~ '\.(local|internal|localhost)$' then raise exception 'Use the public address of your church website'; end if;
+ end if;
+ if p_timezone is not null and not exists(select 1 from pg_timezone_names where name=p_timezone) then raise exception 'Unknown time zone'; end if;
+ update public.churches set events_feed_url=v_url, events_timezone=coalesce(p_timezone,events_timezone),
+  events_sync_status=case when v_url is null then null else 'Waiting for first sync' end, events_synced_at=null
+ where id=public.cc_my_church_id();
+end $$;
+revoke all on function public.cc_set_events_feed(text,text) from public;
+grant execute on function public.cc_set_events_feed(text,text) to authenticated;
+
+-- ===== photos-security-migration.sql =====
+-- Member photos (with generic avatars) + a SECURITY FIX. Run AFTER events-sync-migration.sql. Safe to re-run.
+--
+-- SECURITY FIX: until now any signed-in member could change ANY column of their own profile, including `approved`
+-- (so they could approve themselves) and `church_id`. Members may now change only the columns listed below;
+-- approvals still go through the administrator-only functions.
+--
+-- PHOTOS: stored privately in Supabase Storage. A member's photo is visible to other approved members of the same church only if
+-- the member turned "show my photo" on; administrators can always see/remove photos. Staff-entered members (no account) get their
+-- photos added by administrators and are visible to administrators only.
+
+-- 1. columns -------------------------------------------------------------------------------------------------------------
+alter table public.member_profiles add column if not exists gender text;
+alter table public.member_profiles add column if not exists photo_path text;
+alter table public.member_profiles add column if not exists photo_visible boolean not null default false;
+alter table public.cc_directory_members add column if not exists gender text;
+alter table public.cc_directory_members add column if not exists photo_path text;
+alter table public.cc_directory_members add column if not exists photo_visible boolean not null default false;
+
+alter table public.member_profiles drop constraint if exists member_profiles_gender_ck;
+alter table public.member_profiles add constraint member_profiles_gender_ck check (gender is null or gender in ('female','male'));
+alter table public.member_profiles drop constraint if exists member_profiles_photo_path_ck;
+alter table public.member_profiles add constraint member_profiles_photo_path_ck check (photo_path is null or photo_path = church_id::text || '/' || user_id::text || '.jpg');
+alter table public.cc_directory_members drop constraint if exists cc_directory_gender_ck;
+alter table public.cc_directory_members add constraint cc_directory_gender_ck check (gender is null or gender in ('female','male'));
+alter table public.cc_directory_members drop constraint if exists cc_directory_photo_path_ck;
+alter table public.cc_directory_members add constraint cc_directory_photo_path_ck check (photo_path is null or photo_path = church_id::text || '/dir-' || id::text || '.jpg');
+
+-- 2. the security fix: members may edit only these columns of their profile ---------------------------------------------
+revoke update on public.member_profiles from authenticated;
+grant update (display_name, bio, directory_visible, directory_contact_visible, contact_email, gender, photo_path, photo_visible)
+  on public.member_profiles to authenticated;
+
+-- 3. private photo storage ---------------------------------------------------------------------------------------------
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('member-photos', 'member-photos', false, 2097152, array['image/jpeg','image/png','image/webp'])
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+-- Who may touch a photo file? Path is  <church id>/<user id>.jpg  (member)  or  <church id>/dir-<directory id>.jpg  (staff-entered).
+create or replace function public.cc_photo_access(p_name text, p_write boolean) returns boolean
+language plpgsql stable security definer set search_path='' as $$
+declare v_uid uuid := auth.uid(); v_file text; v_id uuid; v_dir boolean;
+begin
+ if v_uid is null then return false; end if;
+ if (storage.foldername(p_name))[1] is distinct from public.cc_my_church_id()::text then return false; end if;
+ v_file := regexp_replace(storage.filename(p_name), '\.(jpg|jpeg|png|webp)$', '');
+ v_dir := v_file like 'dir-%';
+ begin v_id := (case when v_dir then substr(v_file, 5) else v_file end)::uuid; exception when others then return false; end;
+ if v_dir then
+  return public.cc_is_admin() and exists(select 1 from public.cc_directory_members d where d.id = v_id and d.church_id = public.cc_my_church_id());
+ end if;
+ if not exists(select 1 from public.member_profiles p where p.user_id = v_id and p.church_id = public.cc_my_church_id()) then return false; end if;
+ if v_uid = v_id then return true; end if;                       -- your own photo: read, replace, delete
+ if public.cc_is_admin() then return true; end if;               -- administrators: read, replace, delete
+ if p_write then return false; end if;                           -- nobody else may change it
+ return public.is_approved_member(v_uid)                         -- other members: only if shared and both approved
+    and exists(select 1 from public.member_profiles p where p.user_id = v_id and p.photo_visible and p.approved);
+end $$;
+revoke all on function public.cc_photo_access(text, boolean) from public;
+grant execute on function public.cc_photo_access(text, boolean) to authenticated;
+
+drop policy if exists cc_photo_read on storage.objects;
+create policy cc_photo_read on storage.objects for select to authenticated using (bucket_id = 'member-photos' and public.cc_photo_access(name, false));
+drop policy if exists cc_photo_insert on storage.objects;
+create policy cc_photo_insert on storage.objects for insert to authenticated with check (bucket_id = 'member-photos' and public.cc_photo_access(name, true));
+drop policy if exists cc_photo_update on storage.objects;
+create policy cc_photo_update on storage.objects for update to authenticated using (bucket_id = 'member-photos' and public.cc_photo_access(name, true)) with check (bucket_id = 'member-photos' and public.cc_photo_access(name, true));
+drop policy if exists cc_photo_delete on storage.objects;
+create policy cc_photo_delete on storage.objects for delete to authenticated using (bucket_id = 'member-photos' and public.cc_photo_access(name, true));
+
+-- 4. staff-entered members: gender / photo (administrators only) -------------------------------------------------------
+create or replace function public.cc_set_directory_profile(p_id uuid, p_gender text, p_photo_path text, p_photo_visible boolean) returns void
+language plpgsql security definer set search_path='' as $$
+declare v_church uuid := public.cc_my_church_id();
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if p_gender is not null and p_gender not in ('female','male') then raise exception 'Gender must be female or male'; end if;
+ if p_photo_path is not null and p_photo_path <> v_church::text || '/dir-' || p_id::text || '.jpg' then raise exception 'Invalid photo location'; end if;
+ update public.cc_directory_members set gender = p_gender, photo_path = p_photo_path, photo_visible = (p_photo_path is not null and coalesce(p_photo_visible, false)), updated_at = now()
+  where id = p_id and church_id = v_church;
+ if not found then raise exception 'Directory member not found'; end if;
+end $$;
+revoke all on function public.cc_set_directory_profile(uuid, text, text, boolean) from public;
+grant execute on function public.cc_set_directory_profile(uuid, text, text, boolean) to authenticated;
+
+-- ===== platform-migration.sql =====
+-- Generic platform: church settings, invites, and platform-owner tools. Run AFTER photos-security-migration.sql. Safe to re-run.
+-- Church Connect is the product; each church is a tenant. This file moves church-specific settings out of the code and into the database,
+-- adds email invites (approved automatically on sign-up), and gives the platform owner a church list, church creation by email,
+-- a demo church for showing the product, and "open as administrator" for support.
+
+-- ===== 1. Church settings ========================================================================================
+alter table public.churches add column if not exists website_url text;
+alter table public.churches drop constraint if exists churches_website_url_ck;
+alter table public.churches add constraint churches_website_url_ck check (website_url is null or website_url ~* '^https://[a-z0-9.-]+(:[0-9]+)?(/[^\s]*)?$');
+
+create or replace function public.cc_update_church_settings(p_name text, p_website_url text, p_timezone text default null) returns void
+language plpgsql security definer set search_path='' as $$
+declare v_url text := nullif(trim(coalesce(p_website_url,'')),''); v_host text;
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if length(trim(coalesce(p_name,''))) not between 2 and 150 then raise exception 'The church name must be 2–150 characters'; end if;
+ if v_url is not null then
+  if length(v_url)>300 or v_url !~* '^https://[a-z0-9.-]+(:[0-9]+)?(/[^\s]*)?$' then raise exception 'Use a full https:// web address, or leave it blank'; end if;
+  v_host := lower(substring(v_url from '^https://([^/:]+)'));
+  if v_host !~ '\.' or v_host ~ '^[0-9.]+$' or v_host = 'localhost' or v_host ~ '\.(local|internal|localhost)$' then raise exception 'Use the public address of your church website'; end if;
+ end if;
+ if p_timezone is not null and not exists(select 1 from pg_timezone_names where name = p_timezone) then raise exception 'Unknown time zone'; end if;
+ update public.churches set name = trim(p_name), website_url = v_url, events_timezone = coalesce(p_timezone, events_timezone) where id = public.cc_my_church_id();
+end $$;
+revoke all on function public.cc_update_church_settings(text,text,text) from public;
+grant execute on function public.cc_update_church_settings(text,text,text) to authenticated;
+
+-- ===== 2. Invites (approved automatically when the invited email signs up) =======================================
+create table if not exists public.cc_invites (
+ id uuid primary key default gen_random_uuid(),
+ church_id uuid not null references public.churches(id) on delete cascade,
+ email text not null check (email = lower(email) and length(email) <= 254),
+ role text not null check (role in ('member','pastor','admin')),
+ created_by uuid references auth.users(id) on delete set null,
+ created_at timestamptz not null default now(),
+ used_at timestamptz
+);
+create index if not exists cc_invites_email_idx on public.cc_invites(email) where used_at is null;
+alter table public.cc_invites enable row level security;
+revoke all on public.cc_invites from anon, authenticated;
+grant select on public.cc_invites to authenticated;
+drop policy if exists cc_invites_admin_read on public.cc_invites;
+create policy cc_invites_admin_read on public.cc_invites for select to authenticated using (church_id = public.cc_my_church_id() and public.cc_is_admin());
+
+create or replace function public.cc_invite_member(p_email text, p_role text default 'member') returns uuid
+language plpgsql security definer set search_path='' as $$
+declare v_email text := lower(trim(coalesce(p_email,''))); v_church uuid := public.cc_my_church_id(); v_id uuid;
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if not public.cc_church_writable(v_church) then raise exception 'This church''s subscription is not active'; end if;
+ if v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' or length(v_email) > 254 then raise exception 'Enter a valid email address'; end if;
+ if p_role not in ('member','pastor') then raise exception 'Choose Member or Pastor'; end if;
+ if exists(select 1 from auth.users u join public.member_profiles p on p.user_id = u.id where lower(u.email) = v_email and p.church_id = v_church) then
+  raise exception 'That person is already a member of your church'; end if;
+ delete from public.cc_invites where church_id = v_church and email = v_email and used_at is null;
+ insert into public.cc_invites(church_id, email, role, created_by) values (v_church, v_email, p_role, auth.uid()) returning id into v_id;
+ return v_id;
+end $$;
+revoke all on function public.cc_invite_member(text,text) from public;
+grant execute on function public.cc_invite_member(text,text) to authenticated;
+
+create or replace function public.cc_cancel_invite(p_id uuid) returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ delete from public.cc_invites where id = p_id and church_id = public.cc_my_church_id() and used_at is null;
+end $$;
+revoke all on function public.cc_cancel_invite(uuid) from public;
+grant execute on function public.cc_cancel_invite(uuid) to authenticated;
+
+-- Sign-up: an invite for the person's email approves them (and gives pastor/administrator access) in the invited church.
+drop function if exists public.create_my_profile(text, uuid);
+create or replace function public.create_my_profile(n text, p_church uuid default null) returns void language plpgsql security definer set search_path='' as $$
+declare v uuid; v_email text := lower(coalesce(auth.jwt() ->> 'email','')); inv record; made int;
+begin
+ if auth.uid() is null then raise exception 'Sign in required'; end if;
+ select * into inv from public.cc_invites where email = v_email and used_at is null and (p_church is null or church_id = p_church) order by created_at desc limit 1;
+ v := coalesce(p_church, inv.church_id, (select id from public.churches where (select count(*) from public.churches) = 1));
+ if v is null or not exists(select 1 from public.churches where id = v) then raise exception 'Choose a church to join'; end if;
+ if not public.cc_church_writable(v) then raise exception 'This church is not accepting new members right now'; end if;
+ insert into public.member_profiles(user_id, display_name, church_id) values (auth.uid(), left(trim(n),100), v) on conflict(user_id) do nothing;
+ get diagnostics made = row_count;
+ if made = 1 and inv.id is not null and inv.church_id = v then
+  update public.member_profiles set approved = true where user_id = auth.uid();
+  if inv.role in ('pastor','admin') then
+   if inv.role = 'pastor' and not exists(select 1 from public.member_roles where user_id = auth.uid() and role = 'pastor') then
+    insert into public.member_roles(user_id, role, church_id) values (auth.uid(), 'pastor', v); end if;
+   if not exists(select 1 from public.church_admins where user_id = auth.uid()) then insert into public.church_admins(user_id, church_id) values (auth.uid(), v); end if;
+  end if;
+  update public.cc_invites set used_at = now() where id = inv.id;
+ end if;
+end $$;
+revoke all on function public.create_my_profile(text, uuid) from public;
+grant execute on function public.create_my_profile(text, uuid) to authenticated;
+
+-- ===== 3. Platform owner tools ===================================================================================
+alter table public.cc_platform_admins add column if not exists home_church_id uuid references public.churches(id) on delete set null;
+create table if not exists public.cc_platform_audit (
+ id bigint generated always as identity primary key,
+ user_id uuid, action text not null, details jsonb not null default '{}'::jsonb, created_at timestamptz not null default now());
+alter table public.cc_platform_audit enable row level security;
+revoke all on public.cc_platform_audit from anon, authenticated;
+
+create or replace function public.cc_platform_overview() returns table(id uuid, name text, slug text, created_at timestamptz, plan text, status text, trial_ends_at timestamptz,
+  current_period_end timestamptz, members bigint, administrators bigint, is_current boolean, is_home boolean)
+language plpgsql stable security definer set search_path='' as $$
+begin
+ if not public.cc_is_platform_admin() then raise exception 'Platform administrator access required'; end if;
+ return query
+ select c.id, c.name, c.slug, c.created_at, s.plan, s.status, s.trial_ends_at, s.current_period_end,
+  (select count(*) from public.member_profiles p where p.church_id = c.id),
+  (select count(*) from public.church_admins a where a.church_id = c.id),
+  c.id = public.cc_my_church_id(),
+  c.id = (select pa.home_church_id from public.cc_platform_admins pa where pa.user_id = auth.uid())
+ from public.churches c left join public.church_subscriptions s on s.church_id = c.id order by c.created_at;
+end $$;
+revoke all on function public.cc_platform_overview() from public;
+grant execute on function public.cc_platform_overview() to authenticated;
+
+create or replace function public.cc_platform_new_church(p_name text, p_slug text, p_status text, p_plan text) returns uuid
+language plpgsql security definer set search_path='' as $$
+declare v uuid;
+begin
+ if length(trim(coalesce(p_name,''))) not between 2 and 150 then raise exception 'The church name must be 2–150 characters'; end if;
+ if lower(trim(coalesce(p_slug,''))) !~ '^[a-z0-9-]{2,50}$' then raise exception 'The short name may use only letters, numbers and dashes'; end if;
+ if exists(select 1 from public.churches where slug = lower(trim(p_slug))) then raise exception 'That short name is already taken'; end if;
+ insert into public.churches(name, slug) values (trim(p_name), lower(trim(p_slug))) returning id into v;
+ insert into public.church_subscriptions(church_id, plan, status, trial_ends_at) values (v, p_plan, p_status, case when p_status = 'trialing' then now() + interval '30 days' end);
+ insert into public.church_settings(church_id, id) values (v, true) on conflict do nothing;
+ insert into public.church_organization_preferences(church_id, id) values (v, true) on conflict do nothing;
+ return v;
+end $$;
+revoke all on function public.cc_platform_new_church(text,text,text,text) from public, anon, authenticated;
+
+create or replace function public.cc_platform_create_church_for(p_name text, p_slug text, p_admin_email text) returns jsonb
+language plpgsql security definer set search_path='' as $$
+declare v uuid; v_email text := lower(trim(coalesce(p_admin_email,''))); u uuid; has_profile boolean;
+begin
+ if not public.cc_is_platform_admin() then raise exception 'Platform administrator access required'; end if;
+ if v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then raise exception 'Enter the first administrator''s email address'; end if;
+ select id into u from auth.users where lower(email) = v_email limit 1;
+ if u is not null then
+  select exists(select 1 from public.member_profiles where user_id = u) into has_profile;
+  if has_profile then raise exception 'That email already belongs to a member of a church. Use a different email for the new church''s administrator.'; end if;
+ end if;
+ v := public.cc_platform_new_church(p_name, p_slug, 'trialing', 'trial');
+ if u is not null then
+  insert into public.member_profiles(user_id, display_name, approved, church_id) values (u, 'Church administrator', true, v);
+  insert into public.church_admins(user_id, church_id) values (u, v);
+ else
+  insert into public.cc_invites(church_id, email, role, created_by) values (v, v_email, 'admin', auth.uid());
+ end if;
+ insert into public.cc_platform_audit(user_id, action, details) values (auth.uid(), 'create_church', jsonb_build_object('church', v, 'name', trim(p_name), 'admin_email', v_email));
+ return jsonb_build_object('church_id', v, 'admin', case when u is not null then 'linked' else 'invited' end);
+end $$;
+revoke all on function public.cc_platform_create_church_for(text,text,text) from public;
+grant execute on function public.cc_platform_create_church_for(text,text,text) to authenticated;
+
+-- A demo church with made-up people, ministries, events and announcements, for showing the product.
+create or replace function public.cc_platform_create_demo_church() returns uuid language plpgsql security definer set search_path='' as $$
+declare v uuid; m_w uuid; m_m uuid; m_y uuid; m_mu uuid; m_o uuid; d uuid;
+begin
+ if not public.cc_is_platform_admin() then raise exception 'Platform administrator access required'; end if;
+ v := public.cc_platform_new_church('Grace Community Church (demo)', 'demo-' || substr(md5(random()::text), 1, 6), 'active', 'demo');
+ insert into public.ministries(church_id, name, description, color) values (v, 'Women''s Ministry', 'Fellowship, study and service', '#be185d') returning id into m_w;
+ insert into public.ministries(church_id, name, description, color) values (v, 'Men''s Ministry', 'Prayer breakfasts and mentoring', '#1d4ed8') returning id into m_m;
+ insert into public.ministries(church_id, name, description, color) values (v, 'Youth', 'Ages 12–18', '#16a34a') returning id into m_y;
+ insert into public.ministries(church_id, name, description, color) values (v, 'Music & Choir', 'Praise team and choir', '#7c3aed') returning id into m_mu;
+ insert into public.ministries(church_id, name, description, color) values (v, 'Outreach', 'Community care and food pantry', '#ea580c') returning id into m_o;
+ insert into public.church_events(church_id, title, description, starts_at, location, recurrence, published) values
+  (v, 'Sunday Worship', 'Join us for worship and the Word.', date_trunc('week', now()) + interval '6 days 15 hours', 'Main Sanctuary', 'weekly', true),
+  (v, 'Midweek Bible Study', 'This month: the Book of James.', date_trunc('week', now()) + interval '2 days 23 hours', 'Fellowship Hall', 'weekly', true),
+  (v, 'Youth Night', 'Games, worship and pizza.', now() + interval '5 days', 'Youth Center', 'none', true),
+  (v, 'Community Food Drive', 'Bring canned goods to the lobby.', now() + interval '12 days', 'Church Lobby', 'none', true),
+  (v, 'Choir Rehearsal', 'All voices welcome.', now() + interval '3 days', 'Sanctuary', 'none', true),
+  (v, 'Women''s Fellowship Brunch', 'Brunch and testimonies.', now() + interval '19 days', 'Fellowship Hall', 'none', true);
+ insert into public.church_announcements(church_id, title, body, pinned, published) values
+  (v, 'Welcome to our new church app', 'Message each other, see events and stay connected.', true, true),
+  (v, 'Food drive this month', 'Help us fill the pantry before Thanksgiving.', false, true),
+  (v, 'Pastor''s message', 'Thank you for a wonderful season of growth and service.', false, true);
+ insert into public.cc_directory_members(church_id, full_name, phone, courtesy_title, church_titles, primary_title, sms_consent, active, gender) values
+  (v, 'Ruth Adams', '9045550101', 'Sis.', array['Mother'], 'Mother', true, true, 'female') returning id into d;
+ insert into public.cc_directory_ministries(member_id, ministry_id, is_leader) values (d, m_w, true);
+ insert into public.cc_directory_members(church_id, full_name, phone, courtesy_title, church_titles, primary_title, sms_consent, active, gender) values (v, 'James Carter', '9045550102', 'Bro.', array['Deacon'], 'Deacon', true, true, 'male') returning id into d;
+ insert into public.cc_directory_ministries(member_id, ministry_id, is_leader) values (d, m_m, true);
+ insert into public.cc_directory_members(church_id, full_name, phone, courtesy_title, church_titles, primary_title, sms_consent, active, gender) values (v, 'Naomi Brooks', '9045550103', 'Sis.', '{}', null, false, true, 'female') returning id into d;
+ insert into public.cc_directory_ministries(member_id, ministry_id, is_leader) values (d, m_mu, false);
+ insert into public.cc_directory_members(church_id, full_name, phone, courtesy_title, church_titles, primary_title, sms_consent, active, gender) values (v, 'Samuel Reed', '9045550104', 'Bro.', array['Minister'], 'Minister', true, true, 'male') returning id into d;
+ insert into public.cc_directory_ministries(member_id, ministry_id, is_leader) values (d, m_y, true);
+ insert into public.cc_directory_members(church_id, full_name, phone, courtesy_title, church_titles, primary_title, sms_consent, active, gender) values (v, 'Dorothy Hayes', '9045550105', 'Sis.', array['Missionary'], 'Missionary', true, true, 'female') returning id into d;
+ insert into public.cc_directory_ministries(member_id, ministry_id, is_leader) values (d, m_o, true);
+ insert into public.cc_directory_members(church_id, full_name, phone, courtesy_title, church_titles, primary_title, sms_consent, active, gender) values (v, 'Marcus Webb', '9045550106', 'Bro.', '{}', null, false, true, 'male') returning id into d;
+ insert into public.cc_directory_ministries(member_id, ministry_id, is_leader) values (d, m_y, false);
+ insert into public.cc_platform_audit(user_id, action, details) values (auth.uid(), 'create_demo_church', jsonb_build_object('church', v));
+ return v;
+end $$;
+revoke all on function public.cc_platform_create_demo_church() from public;
+grant execute on function public.cc_platform_create_demo_church() to authenticated;
+
+-- Open any church as its administrator (support / demos). Your home church is remembered so "Back to my church" works.
+-- Your photo reference is cleared when you move (photos are stored per church).
+create or replace function public.cc_platform_switch_church(p_church uuid) returns void language plpgsql security definer set search_path='' as $$
+declare me uuid := auth.uid(); cur uuid;
+begin
+ if not public.cc_is_platform_admin() then raise exception 'Platform administrator access required'; end if;
+ if not exists(select 1 from public.churches where id = p_church) then raise exception 'Church not found'; end if;
+ select church_id into cur from public.member_profiles where user_id = me;
+ update public.cc_platform_admins set home_church_id = coalesce(home_church_id, cur) where user_id = me;
+ if cur is null then
+  insert into public.member_profiles(user_id, display_name, approved, church_id) values (me, 'Platform administrator', true, p_church);
+ else
+  update public.member_profiles set church_id = p_church, approved = true, photo_path = null, photo_visible = false where user_id = me;
+ end if;
+ delete from public.church_admins where user_id = me;
+ insert into public.church_admins(user_id, church_id) values (me, p_church);
+ insert into public.cc_platform_audit(user_id, action, details) values (me, 'switch_church', jsonb_build_object('from', cur, 'to', p_church));
+end $$;
+revoke all on function public.cc_platform_switch_church(uuid) from public;
+grant execute on function public.cc_platform_switch_church(uuid) to authenticated;
+
+-- ===== the first church of this project =====
+update public.churches set name = 'Church Connect' where name = 'Your Church';
