@@ -1,5 +1,6 @@
 // Shared sign-in helpers: a Show/Hide button on every password field and a "Forgot password?" link on sign-in forms.
 import {db} from './data.js';
+import {loadBrand} from './brand.js';
 
 function addReveal(input){
  if(input.closest('.password-wrap'))return; // already has its own toggle
@@ -30,5 +31,6 @@ function addForgot(form){
  p.append(a,msg);form.after(p);
 }
 
+loadBrand();
 document.querySelectorAll('input[type="password"]').forEach(addReveal);
 document.querySelectorAll('form').forEach(f=>{if(f.querySelector('input[type="password"]'))addForgot(f)});

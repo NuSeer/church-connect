@@ -22,6 +22,11 @@ drop function if exists public.cc_member_access(); drop function if exists publi
 drop function if exists public.cc_set_events_feed(text,text);
 drop index if exists public.church_events_website_uq;
 alter table public.church_events drop column if exists source; alter table public.church_events drop column if exists external_id;
+-- generic platform (platform-migration.sql)
+drop function if exists public.cc_update_church_settings(text,text,text); drop function if exists public.cc_invite_member(text,text); drop function if exists public.cc_cancel_invite(uuid);
+drop function if exists public.cc_platform_overview(); drop function if exists public.cc_platform_new_church(text,text,text,text); drop function if exists public.cc_platform_create_church_for(text,text,text);
+drop function if exists public.cc_platform_create_demo_church(); drop function if exists public.cc_platform_switch_church(uuid);
+drop table if exists public.cc_invites; drop table if exists public.cc_platform_audit;
 -- member photos (photos-security-migration.sql). The SECURITY FIX (members cannot edit approved/church_id) is deliberately kept.
 drop policy if exists cc_photo_read on storage.objects; drop policy if exists cc_photo_insert on storage.objects;
 drop policy if exists cc_photo_update on storage.objects; drop policy if exists cc_photo_delete on storage.objects;

@@ -52,3 +52,8 @@ See `EVENTS-AND-ALERTS-SETUP.md`.
 - Tests: 40+ database checks in `tests/replica-multichurch.test.mjs`, `tests/browser-photos.test.mjs` (profile upload/share/remove, directory privacy, administrator Membership screens, staff-entered photo flow).
 - **Deploy order:** run the SQL first, then publish the screens (the screens read the new columns).
 - Not built: photos in message lists/chat headers, ministry galleries, event flyers.
+
+## Generic platform (2026-10-21)
+`platform-migration.sql` + `brand.js`, Church settings (admin-center), invites (membership), Platform tab (connect). Church name/website come from the database (config.js is generic); first church moved in as "New Beginnings Outreach Center" with its website; administrators edit name/website/time zone; invites approve people automatically at sign-up; platform owner can list churches, create a church by the administrator's email, change status, create a demo church, and open any church as administrator (home church remembered, actions logged).
+Tests: ~45 more database checks (invites, church creation, demo, switching, audit) and `tests/browser-platform.test.mjs`. **Deploy order:** run the SQL first, then publish the screens.
+Not built: invite emails (needs Resend), per-church logo/branding/domain, self-service church sign-up and payments.
