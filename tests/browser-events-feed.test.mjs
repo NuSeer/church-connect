@@ -52,7 +52,7 @@ await run('administrator sets the address and syncs', {code: 200, body: {church:
   T('panel shows the saved address and time zone', await tab.evaluate(() => document.getElementById('feedUrl').value === 'https://newbeginningsoutreachctrcogic.org/api/events' && document.getElementById('feedZone').value === 'America/Chicago'));
   T('panel shows the last sync result', await tab.evaluate(() => /Synced 270 events/.test(document.getElementById('feedStatus').textContent)), await tab.evaluate(() => document.getElementById('feedStatus').textContent));
   const picks = await tab.evaluate(() => [...document.querySelectorAll('#eventPick option')].map(o => o.textContent));
-  T('the event dropdown lists only hand-made events, not the ones from the website', picks.length === 2 && /Typed in by hand/.test(picks[1]), picks.join(' | '));
+  T('the event dropdown lists every event and marks the ones from the website', picks.length === 3 && picks.some(x => /from website/.test(x)) && picks.some(x => /Typed in by hand/.test(x) && !/from website/.test(x)), picks.join(' | '));
   T('there is no long list of events any more', await tab.evaluate(() => !document.getElementById('eventList')));
   await tab.$eval('#feedUrl', el => { el.value = '' });
   await tab.type('#feedUrl', 'https://yourchurch.org/api/events');

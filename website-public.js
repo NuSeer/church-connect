@@ -22,8 +22,11 @@ if(db){try{const {data,error}=await db.rpc('cc_public_website',window.CHURCH_CON
  if(hero){
   const photo=typeof data.heroImage==='string'&&data.heroImage.startsWith('https://');
   const base=hex(data.heroColor)?data.heroColor:(hex(data.primaryColor)?data.primaryColor:'');
-  if(base&&!photo)hero.style.background='linear-gradient(125deg,'+base+',color-mix(in srgb,'+base+',#171127 35%))';
-  const ink=readableOn(photo?'#222222':(base||'#4933a2'),data.heroText==='white'||data.heroText==='black'?data.heroText:'')==='black';
+  const third=hex(data.tertiaryColor)?data.tertiaryColor:'';
+  if(third){document.documentElement.dataset.tertiary='1';document.documentElement.style.setProperty('--cc-public-tertiary',third)}
+  if(base&&!photo)hero.style.background='linear-gradient(125deg,'+base+','+(third||'color-mix(in srgb,'+base+',#171127 35%)')+')';
+  const mixed=third&&base?'#'+[1,3,5].map(i=>Math.round((parseInt(base.slice(i,i+2),16)+parseInt(third.slice(i,i+2),16))/2).toString(16).padStart(2,'0')).join(''):base;
+  const ink=readableOn(photo?'#222222':(mixed||'#4933a2'),data.heroText==='white'||data.heroText==='black'?data.heroText:'')==='black';
   hero.style.setProperty('--on-primary',ink?'#111111':'#ffffff');hero.style.setProperty('--on-primary-soft',ink?'#2a2a2a':'#e3e6e9');
  }
 }}catch(e){console.warn('Hero colors unavailable',e)}}

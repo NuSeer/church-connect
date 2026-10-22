@@ -55,6 +55,9 @@ input[type=checkbox],input[type=radio]{width:auto;flex:0 0 auto}
 .cc-intro{margin:8px 0 18px;padding:11px 14px;background:var(--church-wash);border-left:4px solid var(--church-accent);border-radius:10px;font-size:14px;line-height:1.55;color:var(--ink)}
 
 /* Lettering on the church's main and accent colors (set by brand.js; white/dark by default) */
-.nav,.hero,.tab.active{color:var(--on-primary,#fff)}.nav .links a,.hero p{color:var(--on-primary-soft,#e3e6e9)}.btn{color:var(--on-accent,#1b1932)}
+.nav,.hero,.tab.active{color:var(--on-primary,#fff)}.nav .links a,.hero p{color:var(--on-primary-soft,#e3e6e9)}.btn:not(.secondary){color:var(--on-primary,#fff)}.btn.secondary{color:var(--church-ink,var(--cc-purple))}
 .cc-letters{border:1px solid var(--line);border-radius:10px;margin:12px 0;padding:8px 14px;display:flex;gap:18px;flex-wrap:wrap;align-items:center}.cc-letters legend{font-weight:700;padding:0 6px}.cc-letters .checkline{margin:0}
 .cc-gotit{margin-left:8px;padding:5px 12px;font-size:.85rem}.cc-help-item{margin:12px 0}
+
+/* Third color from Brand Studio: a soft band behind the public site sections so the main and accent colors do not clash */
+:root[data-tertiary] .section{background:color-mix(in srgb,var(--cc-public-tertiary) 22%,#fff)}
