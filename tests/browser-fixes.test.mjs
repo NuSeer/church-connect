@@ -98,7 +98,7 @@ const vis = (tab, sel) => tab.evaluate(s => { const e = document.querySelector(s
   T('Message to the webmaster has the request types, without Change website text', kinds.length === 4 && !kinds.some(k => /website text/i.test(k)), kinds.join(' | '));
   const perms = await tab.evaluate(() => [...document.querySelectorAll('#permissionChoices label')].map(l => l.textContent.trim()));
   T('Manage events and Manage announcements are gone from permissions', !perms.some(x => /Manage events|Manage announcements/.test(x)), perms.join(' | '));
-  T('there is no Back button on the Administration page itself', !(await vis(tab, '.cc-back')));
+  T('the Administration page has a Back to Admin button that returns to the member Admin tab', await tab.evaluate(() => document.querySelector('.cc-back a')?.getAttribute('href') === 'connect.html?view=admin'));
   await tab.select('#wmKind', 'photo');
   await tab.type('#wmMessage', 'Please put the choir photo on the Ministries page');
   await tab.click('#wmForm button[type=submit]'); await new Promise(r => setTimeout(r, 900));
@@ -120,6 +120,46 @@ for (const page of ['admin.html', 'membership.html', 'ministries-admin.html', 'w
   await tab.click('#eventEdit');
   T('Edit fills the form', await tab.evaluate(() => document.getElementById('eventTitle').value) === 'Choir Night');
   T('no page errors', !errors.length, errors.join(' | '));
+  await tab.close();
+}
+{
+  const {tab, rec, errors} = await open('connect.html', {isAdmin: false});
+  await tab.click('[data-view="profile"]');
+  await tab.type('#smsPhone', '7575550123');
+  T('the phone number gets its hyphens as it is typed', await tab.evaluate(() => document.getElementById('smsPhone').value) === '757-555-0123', await tab.evaluate(() => document.getElementById('smsPhone').value));
+  await tab.click('#smsDirectory');
+  await tab.click('#saveProfileTop'); await new Promise(r => setTimeout(r, 900));
+  T('ticking Include my number in the member directory is saved', (rec.sms || []).some(x => x.directory_phone_visible === true && x.phone), JSON.stringify(rec.sms));
+  T('no page errors', !errors.length, errors.join(' | '));
+  await tab.close();
+}
+{
+  const {tab, errors} = await open('admin.html', {isAdmin: true, events: [{id: 'e1', title: 'Zoom Prayer', description: '', starts_at: '2026-12-01T18:00:00Z', location: '', recurrence: 'none', published: true, source: 'website'}, {id: 'e2', title: 'Choir Night', description: '', starts_at: '2026-12-02T18:00:00Z', location: '', recurrence: 'none', published: true, source: null}]});
+  const opts = await tab.evaluate(() => [...document.querySelectorAll('#eventPick option')].length);
+  T('the event dropdown shows all events, not just one', opts === 3, String(opts));
+  await tab.select('#eventPick', 'e1');
+  T('a website event cannot be edited or deleted here', await tab.evaluate(() => document.getElementById('eventEdit').disabled && document.getElementById('eventDelete').disabled));
+  T('...but offers to ask the webmaster', await tab.evaluate(() => !document.getElementById('eventAsk').hidden));
+  T('the note says website events are NOT changed here', await tab.evaluate(() => /are not changed here/.test(document.getElementById('eventPickNote').textContent)));
+  await tab.click('#eventAsk');
+  T('asking the webmaster fills in the request', await tab.evaluate(() => document.getElementById('wmKind').value === 'event_change' && document.getElementById('wmEvent').value === 'e1'));
+  T('no page errors', !errors.length, errors.join(' | '));
+  await tab.close();
+}
+{
+  const {tab, errors} = await open('ministries-admin.html', {isAdmin: true});
+  T('the Ministries page loads without errors', !errors.length, errors.join(' | '));
+  await tab.close();
+}
+{
+  // colors are remembered on the device, so moving between pages does not flash the standard colors
+  const tab = await (await browser.createBrowserContext()).newPage();
+  await tab.evaluateOnNewDocument(() => localStorage.setItem('cc-brand', JSON.stringify({name: 'Remembered Church', primary: '#7a1f3d', accent: '#f2b705', text: 'white'})));
+  await tab.setRequestInterception(true);
+  tab.on('request', r => /supabase.co/.test(r.url()) ? r.abort() : r.continue());
+  await tab.goto('http://localhost:' + port + '/admin-center.html', {waitUntil: 'domcontentloaded'});
+  T('the remembered main color is applied straight away', await tab.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--church-primary').trim()) === '#7a1f3d');
+  T('the remembered church name shows before anything loads', await tab.evaluate(() => document.querySelector('[data-church]').textContent) === 'Remembered Church');
   await tab.close();
 }
 await browser.close(); server.close();
