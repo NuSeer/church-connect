@@ -33,7 +33,14 @@ export function applyColors(primary, accent) {
   if (HEX.test(primary || '')) {
     root.setProperty('--church-primary', primary); root.setProperty('--cc-purple', primary);
     root.setProperty('--church-secondary', `color-mix(in srgb, ${primary}, #ffffff 25%)`);
+    // soft backgrounds, tabs, panels and borders take a light tint of the church's main color
+    const mix = (pct, base = '#ffffff') => `color-mix(in srgb, ${primary} ${pct}%, ${base})`;
+    root.setProperty('--church-tint', mix(11)); root.setProperty('--church-tint-strong', mix(20));
+    root.setProperty('--church-wash', mix(4)); root.setProperty('--church-surface', mix(4)); root.setProperty('--church-line', mix(14)); root.setProperty('--line', mix(14));
     document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', primary));
   }
-  if (HEX.test(accent || '')) { root.setProperty('--church-accent', accent); root.setProperty('--gold', accent) }
+  if (HEX.test(accent || '')) {
+    root.setProperty('--church-accent', accent); root.setProperty('--gold', accent);
+    root.setProperty('--church-accent-tint', `color-mix(in srgb, ${accent} 18%, #ffffff)`); root.setProperty('--church-accent-ink', `color-mix(in srgb, ${accent} 55%, #000000)`);
+  }
 }

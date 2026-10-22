@@ -44,3 +44,4 @@ async function saveColors(p,a,msg){
 $('colorsForm').onsubmit=async ev=>{ev.preventDefault();await saveColors($('colorPrimary').value,$('colorAccent').value,'Saved. Your church colors now show across the app.')};
 $('colorsReset').onclick=async()=>{if(await saveColors('','','Back to the standard colors. Reload the page to see them.')){$('colorPrimary').value=STD.p;$('colorAccent').value=STD.a;applyColors(STD.p,STD.a)}};
 await init();await loadColors().catch(()=>{});
+if(location.hash==='#churchColors')setTimeout(()=>$('churchColors')?.scrollIntoView({behavior:'smooth'}),300);
