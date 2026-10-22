@@ -68,7 +68,10 @@ function renderMyPhoto(){
  $('photoVisible').checked=!!profile.photo_visible&&!!profile.photo_path;$('photoVisible').disabled=!profile.photo_path;
  $('photoRemove').classList.toggle('hidden',!profile.photo_path);
 }
-$('gender').onchange=()=>$('myAvatar').replaceChildren(myAvatarNow($('gender').value));
+$('gender').onchange=async()=>{const g=$('gender').value||null;$('myAvatar').replaceChildren(myAvatarNow(g));const st=$('photoStatus');st.textContent='Saving…';
+ const {error}=await db.from('member_profiles').update({gender:g}).eq('user_id',me.id);
+ if(error){st.textContent='Could not save: '+error.message;return}
+ profile.gender=g;st.textContent='Saved.'};
 const onPhoto=async ev=>{
  const file=ev.target.files[0];ev.target.value='';if(!file)return;const st=$('photoStatus');st.textContent='Preparing your photo…';
  try{

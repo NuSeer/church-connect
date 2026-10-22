@@ -147,6 +147,17 @@ T('addresses map to environments (NBOC has its own; unknown addresses use the de
   await tab.type('#setupName', 'Bad Number'); await tab.type('#setupPhone', '12345'); await tab.click('#setupForm button'); await new Promise(r => setTimeout(r, 800));
   T('a number that is not a phone number is refused in plain words and no profile is created', !rec.rpc.some(r => r.fn === 'create_my_profile') && /phone number like/.test(await text(tab, '#notice, .notice, #status') || await tab.evaluate(() => document.body.innerText)), ''); await tab.close() }
 
+// ---------------- Introductions on each section ----------------
+{ const {tab} = await open('connect.html', {isAdmin: true, platform: true, overview: []});
+  const intro = id => tab.evaluate(i => document.querySelector('#' + i + ' .cc-intro')?.textContent || '', id);
+  for (const [id, word] of [['updates', 'Updates'], ['events', 'Events'], ['messages', 'Messages'], ['ministries', 'Ministries'], ['directory', 'Directory'], ['profile', 'My Profile'], ['giving', 'My Giving'], ['broadcast', 'Broadcast'], ['admin', 'Admin']]) {
+    const t = await intro(id); T('the ' + word + ' section starts with a short introduction', t.startsWith(word) && t.length > 60 && t.length < 400, t.slice(0, 80)) }
+  T('the Platform section has no introduction or explanatory text for anyone', await tab.evaluate(() => !document.querySelector('#platform .cc-intro') && !/For the platform owner/.test(document.getElementById('platform').textContent)));
+  T('the Broadcast and Admin introductions say who can see them', /administrators, pastors and approved broadcasters/.test(await intro('broadcast')) && /administrators and pastors/.test(await intro('admin')));
+  await tab.close() }
+{ const {tab} = await open('connect.html', {});
+  T('an ordinary member sees no Broadcast, Admin or Platform tab (so none of their text)', await tab.evaluate(() => ['broadcastTab', 'adminTab', 'platformTab'].every(id => document.getElementById(id).classList.contains('hidden')))); await tab.close() }
+
 // ---------------- Church colors ----------------
 const GREEN = {...NBOC, brand_primary: '#1a5c3a', brand_accent: '#f2b705'};
 const rootVar = (tab, n) => tab.evaluate(v => document.documentElement.style.getPropertyValue(v).trim(), n);
