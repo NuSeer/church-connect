@@ -154,6 +154,21 @@ const rootVar = (tab, n) => tab.evaluate(v => document.documentElement.style.get
   T('each church has its own colors that replace the standard ones across the member area (header, buttons, accent)', await rootVar(tab, '--church-primary') === '#1a5c3a' && await rootVar(tab, '--church-accent') === '#f2b705' && await rootVar(tab, '--cc-purple') === '#1a5c3a');
   T('...the header really is that color on screen', await tab.evaluate(() => getComputedStyle(document.querySelector('.nav')).backgroundColor) === 'rgb(26, 92, 58)', await tab.evaluate(() => getComputedStyle(document.querySelector('.nav')).backgroundColor));
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
+{ const {tab} = await open('connect.html', {churches: [GREEN]});
+  const bg = sel => tab.evaluate(s => getComputedStyle(document.querySelector(s)).backgroundColor, sel);
+  T('the tab bar, not just the header, follows the church color', await bg('.tabs') !== 'rgb(239, 237, 248)' && await bg('.tabs') !== 'rgba(0, 0, 0, 0)', await bg('.tabs'));
+  T('buttons, panels and borders follow it too (tints of the main color)', await rootVar(tab, '--church-tint') !== '' && await rootVar(tab, '--church-wash') !== '' && await rootVar(tab, '--church-line') !== '' && await bg('.btn.secondary') === await bg('.tabs'), await bg('.btn.secondary'));
+  T('the accent color tints tags and highlights', await rootVar(tab, '--church-accent-tint') !== '' && await rootVar(tab, '--church-accent-ink') !== '');
+  T('the Admin tab has a "Church settings & colors" shortcut', await tab.evaluate(() => !!document.querySelector('#admin a[href="admin-center.html#churchColors"]')));
+  await tab.close() }
+{ const {tab} = await open('connect.html', {churches: [NBOC]});
+  T('with no colors chosen the standard tab-bar color is unchanged', await tab.evaluate(() => getComputedStyle(document.querySelector('.tabs')).backgroundColor) === 'rgb(239, 237, 248)'); await tab.close() }
+for (const pg of ['admin.html', 'membership.html', 'ministries-admin.html', 'website-editor.html']) {
+  const {tab} = await open(pg, {isAdmin: true});
+  T(pg + ' has a Church colors link in its header', await tab.evaluate(() => !!document.querySelector('.nav a[href="admin-center.html#churchColors"]'))); await tab.close() }
+{ const {tab} = await open('website-editor.html', {isAdmin: true});
+  const dims = await tab.evaluate(() => { const c = document.querySelector('#givingFields input[type=checkbox]'), l = c && c.closest('label'); return c ? {cw: c.getBoundingClientRect().width, lw: l.getBoundingClientRect().width, lh: l.getBoundingClientRect().height} : null });
+  T('giving options: the checkbox keeps its small size and the provider name sits beside it on one line', dims && dims.cw < 30 && dims.lh < 40, JSON.stringify(dims)); await tab.close() }
 { const {tab} = await open('connect.html', {signedOut: true, churches: [GREEN]});
   T('the sign-in page uses the church colors too', await rootVar(tab, '--church-primary') === '#1a5c3a'); await tab.close() }
 { const {tab} = await open('connect.html', {churches: [NBOC]});
