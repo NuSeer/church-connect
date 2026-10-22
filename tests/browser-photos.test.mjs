@@ -54,7 +54,7 @@ async function open(url, st) {
     else if (p.startsWith('/storage/v1/object/sign/member-photos')) { ct = 'image/png'; raw = PNG }
     else if (p.startsWith('/storage/v1/object/member-photos/') && (m === 'POST' || m === 'PUT')) { rec.uploads.push({path: decodeURIComponent(p.replace('/storage/v1/object/member-photos/', '')), bytes: (ev.request.postData || '').length}); body = {Key: 'member-photos/x'} }
     else if (p === '/storage/v1/object/member-photos' && m === 'DELETE') { rec.removes.push(...(post().prefixes || [])); body = [] }
-    else if (p.endsWith('/rest/v1/member_profiles') && m === 'PATCH') { rec.patches.push(post()); Object.assign(st.profile, post()); body = [] }
+    else if (p.endsWith('/rest/v1/member_profiles') && m === 'PATCH') { rec.patches.push(post()); Object.assign(st.profile, post()); body = [{user_id: st.profile.user_id || 'u1'}] }
     else if (p.endsWith('/rest/v1/member_profiles')) body = st.members && ev.request.url.includes('order=created_at') ? st.members : (st.directoryOthers && !ev.request.url.includes('user_id=eq') ? st.directoryOthers : [st.profile]);
     else if (p.endsWith('/rest/v1/cc_directory_members')) body = st.dirMembers || [];
     if (raw) await cdp.send('Fetch.fulfillRequest', {requestId: ev.requestId, responseCode: code, responseHeaders: [{name: 'content-type', value: ct}, {name: 'access-control-allow-origin', value: '*'}], body: raw.toString('base64')}).catch(() => {});

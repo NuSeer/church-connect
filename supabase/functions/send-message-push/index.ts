@@ -51,6 +51,20 @@ async function joinRequestAlert(m:any){
  const {data:person}=await db.from('member_profiles').select('display_name').eq('user_id',m.user_id).maybeSingle();
  return await approvalAlert('Ministry request',`${String(person?.display_name||'A member').slice(0,60)} asked to join ${String(ministry.name).slice(0,60)}.`,ministry.church_id,`join:${m.user_id}:${m.ministry_id}`);
 }
+// Tell the church's webmasters (members with the Webmaster permission, or the administrators if nobody has it) that a request is waiting.
+async function webmasterAlert(m:any){
+ if(!m?.id||!m?.church_id||m.status!=='open')return new Response('Ignored',{status:200});
+ const id=await idFor('webmaster:'+m.id);
+ const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:id});
+ if(dupe?.code==='23505')return new Response('Duplicate',{status:200});if(dupe)throw dupe;
+ const {data:wm,error:we}=await db.from('cc_staff_delegations').select('user_id').eq('church_id',m.church_id).eq('permission','website_manage');if(we)throw we;
+ let ids=(wm||[]).map((x:any)=>x.user_id);
+ if(!ids.length){const {data:admins,error:ae}=await db.from('church_admins').select('user_id').eq('church_id',m.church_id);if(ae)throw ae;ids=(admins||[]).map((x:any)=>x.user_id)}
+ if(!ids.length)return new Response('No webmaster',{status:200});
+ const {data:subs,error:se}=await db.from('member_push_subscriptions').select('id,endpoint,p256dh,auth').in('user_id',ids);if(se)throw se;
+ const what:Record<string,string>={event:'New event to list',event_change:'Event change',photo:'Photo to upload',other:'Website request'};
+ return await deliver(subs||[],JSON.stringify({title:'Message for the webmaster',body:(what[m.kind]||'Website request')+(m.message?': '+String(m.message).slice(0,90):''),page:'admin-center',messageId:id}));
+}
 Deno.serve(async request=>{
  if(request.method!=='POST')return new Response('Method not allowed',{status:405});
  if(!secret||request.headers.get('x-cc-webhook-secret')!==secret)return new Response('Unauthorized',{status:401});
@@ -60,6 +74,7 @@ Deno.serve(async request=>{
   if(event.type==='INSERT'&&event.table==='member_profiles')return m?.approved===true?new Response('Ignored',{status:200}):await approvalAlert('New member waiting for approval',`${String(m?.display_name||'Someone').slice(0,60)} asked to join. Tap to review.`,m?.church_id??null,'profile:'+m?.user_id);
   if(event.type==='UPDATE'&&event.table==='member_profiles')return await approvedNotice(m,event.old_record);
   if(event.type==='INSERT'&&event.table==='ministry_join_requests')return await joinRequestAlert(m);
+ if(event.type==='INSERT'&&event.table==='cc_webmaster_requests')return await webmasterAlert(m);
   if(event.type!=='INSERT'||event.table!=='messages'||!m?.id||!m?.conversation_id||!m?.sender_id)return new Response('Ignored',{status:200});
   // Webhook retries must not notify twice: claim the message id first and stop if another delivery already did.
   const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:m.id});
