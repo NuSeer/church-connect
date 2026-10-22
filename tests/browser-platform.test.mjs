@@ -51,7 +51,8 @@ async function open(url, st = {}) {
       else body = null;
     }
     else if (p.endsWith('/rest/v1/church_admins')) body = st.isAdmin ? [{user_id: ME.id}] : [];
-    else if (p.endsWith('/rest/v1/member_profiles')) body = [PROFILE];
+    else if (p.endsWith('/rest/v1/member_profiles')) body = st.noProfile && !rec.rpc.some(r => r.fn === 'create_my_profile') ? [] : [PROFILE];
+    else if (p.endsWith('/rest/v1/member_sms_preferences')) { if (m === 'POST') (rec.sms ??= []).push(post()); body = m === 'POST' ? [] : null }
     else if (p.endsWith('/rest/v1/churches')) {
       if (st.noColorsColumn && /brand_primary/.test(u.search)) { code = 400; body = {message: 'column churches.brand_primary does not exist'} }
       else if (st.noWebsiteColumn && /website_url/.test(u.search)) { code = 400; body = {message: 'column churches.website_url does not exist'} }
@@ -106,6 +107,7 @@ T('addresses map to environments (NBOC has its own; unknown addresses use the de
   await tab.click('[data-view="events"]'); await new Promise(r => setTimeout(r, 900));
   T('clicking it shows the calendar for this month', await vis(tab, '#events') && !!(await text(tab, '#evMonth')) && (await tab.evaluate(() => document.querySelectorAll('#evGrid .day:not(.empty)').length)) >= 28);
   T('each of the church events appears on its day and in the list', (await text(tab, '#evGrid') || '').includes('Sunday Worship') && /Sunday Worship/.test(await text(tab, '#evDetails') || '') && /Main Sanctuary/.test(await text(tab, '#evDetails') || ''), await text(tab, '#evDetails'));
+  T('the Events tab explains what Add to calendar does, and each event has that button', /put it on your phone/.test(await text(tab, '#evHint') || '') && (await tab.evaluate(() => [...document.querySelectorAll('#evDetails button')].every(b => /Add to calendar/.test(b.textContent)) && document.querySelectorAll('#evDetails button').length > 0)));
   T('an event with no place says "Location TBA"', /Location TBA/.test(await text(tab, '#evDetails') || ''));
   if (!(await text(tab, '#evGrid') || '').includes('Bible Study')) { await tab.click('#evNext'); await new Promise(r => setTimeout(r, 300)) } // tomorrow can fall in next month
   await tab.evaluate(() => [...document.querySelectorAll('#evGrid .day')].find(b => /Bible Study/.test(b.textContent)).click());
@@ -124,6 +126,26 @@ T('addresses map to environments (NBOC has its own; unknown addresses use the de
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
 { const {tab} = await open('connect.html?view=events', {events: []});
   T('a link ?view=events opens the Events tab directly', await vis(tab, '#events')); await tab.close() }
+
+// ---------------- Phone number at sign-up ----------------
+{ const {tab, rec, errors} = await open('connect.html', {noProfile: true});
+  T('the sign-up profile form asks for a phone number and a text-message OK box (both optional)', await vis(tab, '#profileSetup') && await tab.evaluate(() => !!document.getElementById('setupPhone') && !document.getElementById('setupPhone').required && !!document.getElementById('setupSmsConsent') && !document.getElementById('setupSmsConsent').checked));
+  await tab.type('#setupName', 'Sister Grace'); await tab.type('#setupPhone', '(757) 555-0123'); await tab.click('#setupSmsConsent');
+  await tab.click('#setupForm button'); await new Promise(r => setTimeout(r, 1200));
+  const cp = rec.rpc.find(r => r.fn === 'create_my_profile');
+  T('the profile is created with the name', cp && cp.n === 'Sister Grace', JSON.stringify(cp));
+  const sms = (rec.sms || [])[0];
+  T('the phone is saved in international form, with consent only because the box was ticked', sms && sms.phone === '+17575550123' && sms.opted_in === true, JSON.stringify(rec.sms));
+  T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
+{ const {tab, rec} = await open('connect.html', {noProfile: true});
+  await tab.type('#setupName', 'Brother Sam'); await tab.type('#setupPhone', '757-555-0199'); await tab.click('#setupForm button'); await new Promise(r => setTimeout(r, 1200));
+  T('a phone number without the text box ticked is stored but NOT opted in to texts', (rec.sms || [])[0] && rec.sms[0].phone === '+17575550199' && rec.sms[0].opted_in === false, JSON.stringify(rec.sms)); await tab.close() }
+{ const {tab, rec} = await open('connect.html', {noProfile: true});
+  await tab.type('#setupName', 'No Phone'); await tab.click('#setupForm button'); await new Promise(r => setTimeout(r, 1000));
+  T('leaving the phone blank is fine: profile created, nothing saved for texts', rec.rpc.some(r => r.fn === 'create_my_profile') && !(rec.sms || []).length); await tab.close() }
+{ const {tab, rec} = await open('connect.html', {noProfile: true});
+  await tab.type('#setupName', 'Bad Number'); await tab.type('#setupPhone', '12345'); await tab.click('#setupForm button'); await new Promise(r => setTimeout(r, 800));
+  T('a number that is not a phone number is refused in plain words and no profile is created', !rec.rpc.some(r => r.fn === 'create_my_profile') && /phone number like/.test(await text(tab, '#notice, .notice, #status') || await tab.evaluate(() => document.body.innerText)), ''); await tab.close() }
 
 // ---------------- Church colors ----------------
 const GREEN = {...NBOC, brand_primary: '#1a5c3a', brand_accent: '#f2b705'};
