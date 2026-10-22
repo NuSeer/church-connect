@@ -35,7 +35,7 @@ const got = JSON.parse((await db.query(fs.readFileSync(repo + 'export-for-new-pr
 const byName = (arr, key) => new Map((arr || []).map(x => [key(x), x]));
 const wantTables = byName(want.tables, t => t.table), gotTables = byName(got.tables, t => t.table);
 const missingTables = [...wantTables.keys()].filter(k => !gotTables.has(k)); T('every exported table exists', missingTables.length === 0, missingTables.join(', '));
-const extraTables = [...gotTables.keys()].filter(k => !wantTables.has(k)); T('the only extra tables are the newest features', extraTables.every(t => ['cc_invites', 'cc_platform_audit'].includes(t)), extraTables.join(', '));
+const extraTables = [...gotTables.keys()].filter(k => !wantTables.has(k)); T('the only extra tables are the newest features', extraTables.every(t => ['cc_invites', 'cc_platform_audit', 'cc_webmaster_requests'].includes(t)), extraTables.join(', '));
 let colProblems = []; for (const [tn, wt] of wantTables) { const gt = gotTables.get(tn); if (!gt) continue; const gc = byName(gt.columns, c => c.name); for (const c of wt.columns) { const x = gc.get(c.name); if (!x) colProblems.push(`${tn}.${c.name} missing`); else if (x.type !== c.type || x.not_null !== c.not_null) colProblems.push(`${tn}.${c.name}: ${x.type}/${x.not_null} vs ${c.type}/${c.not_null}`) } }
 T('every exported column exists with the same type and null rule', colProblems.length === 0, colProblems.slice(0, 6).join(' | '));
 const wantFn = new Set(want.functions.map(f => f.name + '(' + f.args + ')')), gotFn = new Set(got.functions.map(f => f.name + '(' + f.args + ')'));
@@ -49,7 +49,7 @@ const missingCon = [...wantCon].filter(c => !gotCon.has(c)); T('every exported k
 const g = a => new Set((a || []).map(x => `${x.table}:${x.role}:${x.privilege}`)); const wg = g(want.grants), gg = g(got.grants);
 // the new project is allowed to be STRICTER: anonymous visitors, references and triggers are dropped (the real project still carries some of those by default)
 const lostGrants = [...wg].filter(x => !gg.has(x)).filter(x => !(/:anon:/.test(x) || /:(REFERENCES|TRIGGER|TRUNCATE)$/.test(x))); T('no permission the app needs is missing (the new project may only be stricter)', lostGrants.length === 0, lostGrants.slice(0, 5).join(' | '));
-const extraGrants = [...gg].filter(x => !wg.has(x)).filter(x => !/^(cc_invites|cc_platform_audit|churches):/.test(x)); T('and no extra permission appears (nothing wider than the real project)', extraGrants.length === 0, extraGrants.slice(0, 8).join(' | '));
+const extraGrants = [...gg].filter(x => !wg.has(x)).filter(x => !/^(cc_invites|cc_platform_audit|cc_webmaster_requests|churches):/.test(x)); T('and no extra permission appears (nothing wider than the real project)', extraGrants.length === 0, extraGrants.slice(0, 8).join(' | '));
 T('both storage buckets exist and the photo bucket is private', got.buckets.some(b => b.id === 'member-photos' && b.public === false) && got.buckets.some(b => b.id === 'church-media'), JSON.stringify(got.buckets));
 
 // ---- behaviour on the empty project
@@ -87,4 +87,13 @@ eq('an unknown permission is still refused', 'ERR Unknown permission', await as(
 eq('a member cannot write colors straight into the table', 'ERR permission denied', await as(U.M, `update public.churches set brand_primary='#000000'`));
 eq('blank puts the standard colors back', 'ok [{"brand_primary":null,"brand_accent":null}]', await (async () => { await as(U.O, `select public.cc_update_church_colors('','','')`); return await as(U.O, `select brand_primary,brand_accent from public.churches where id=public.cc_my_church_id()`) })());
 eq('photo storage is private to the right people (a member cannot read another member\'s unshared photo)', 'ok [{"n":0}]', await (async () => { const ch = (await db.query(`select church_id from public.member_profiles where user_id='${U.M}'`)).rows[0].church_id; await db.exec(`insert into storage.objects(bucket_id,name) values('member-photos','${ch}/${U.O}.jpg')`); await db.exec(`insert into public.member_profiles(user_id,display_name,approved,church_id) values('${U.M2}','Second',true,'${ch}')`); return await as(U.M2, `select count(*)::int n from storage.objects where name='${ch}/${U.O}.jpg'`) })());
+eq('an administrator can message the webmaster', 'ok', await as(U.O, `select public.cc_send_webmaster_request('photo',null,'Please add the choir photo')`));
+eq('a photo request needs a message', 'ERR Please add a short message', await as(U.O, `select public.cc_send_webmaster_request('photo',null,'')`));
+eq('an ordinary member cannot send one', 'ERR Administrator access required', await as(U.M2, `select public.cc_send_webmaster_request('other',null,'hi')`));
+eq('the person with the Webmaster permission sees the request', 'ok [{"n":1}]', await as(U.M, `select count(*)::int n from public.cc_webmaster_requests`));
+eq('an ordinary member sees none', 'ok [{"n":0}]', await as(U.M2, `select count(*)::int n from public.cc_webmaster_requests`));
+eq('an ordinary member cannot mark one done', 'ERR Webmaster access required', await as(U.M2, `select public.cc_finish_webmaster_request((select id from public.cc_webmaster_requests limit 1))`));
+eq('the webmaster can mark it done', 'ok [{"status":"done"}]', await (async () => { await as(U.M, `select public.cc_finish_webmaster_request((select id from public.cc_webmaster_requests limit 1))`); return await as(U.O, `select status from public.cc_webmaster_requests limit 1`) })());
+eq('a member can still edit their own display name', 'ok', await as(U.M2, `update public.member_profiles set display_name='Renamed' where user_id='${U.M2}'`));
+eq('...but cannot approve themselves', 'ERR permission denied', await as(U.M2, `update public.member_profiles set approved=true where user_id='${U.M2}'`));
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED'); process.exit(fails ? 1 : 0);

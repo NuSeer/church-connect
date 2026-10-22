@@ -51,9 +51,9 @@ await run('administrator sets the address and syncs', {code: 200, body: {church:
   T('admin workspace opened', await tab.evaluate(() => !document.getElementById('workspace').classList.contains('hidden')));
   T('panel shows the saved address and time zone', await tab.evaluate(() => document.getElementById('feedUrl').value === 'https://newbeginningsoutreachctrcogic.org/api/events' && document.getElementById('feedZone').value === 'America/Chicago'));
   T('panel shows the last sync result', await tab.evaluate(() => /Synced 270 events/.test(document.getElementById('feedStatus').textContent)), await tab.evaluate(() => document.getElementById('feedStatus').textContent));
-  const list = await tab.evaluate(() => document.getElementById('eventList').innerText);
-  T('website events are marked and cannot be edited or deleted here', /From your church website/.test(list) && (await tab.evaluate(() => document.querySelectorAll('#eventList [data-edit]').length)) === 1);
-  T('hand-made events keep their Edit/Delete buttons', await tab.evaluate(() => [...document.querySelectorAll('#eventList .list-item')].some(i => /Typed in by hand/.test(i.innerText) && i.querySelector('[data-edit]') && i.querySelector('[data-delete]'))));
+  const picks = await tab.evaluate(() => [...document.querySelectorAll('#eventPick option')].map(o => o.textContent));
+  T('the event dropdown lists only hand-made events, not the ones from the website', picks.length === 2 && /Typed in by hand/.test(picks[1]), picks.join(' | '));
+  T('there is no long list of events any more', await tab.evaluate(() => !document.getElementById('eventList')));
   await tab.$eval('#feedUrl', el => { el.value = '' });
   await tab.type('#feedUrl', 'https://yourchurch.org/api/events');
   await tab.select('#feedZone', 'America/New_York');

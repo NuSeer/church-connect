@@ -29,6 +29,7 @@ export async function loadBrand() {
 
 // A church's own colors replace the standard purple and gold. Anything that is not a plain #rrggbb value is ignored (standard look).
 const HEX = /^#[0-9a-f]{6}$/i;
+const STANDARD = '#5542a8';
 // 'white' or 'black' lettering for a background color: an explicit choice wins, otherwise whichever reads better.
 export function readableOn(color, choice) {
   if (choice === 'white' || choice === 'black') return choice;
@@ -37,9 +38,10 @@ export function readableOn(color, choice) {
 }
 export function applyColors(primary, accent, text) {
   const root = document.documentElement.style;
+  // the lettering choice also works on the standard purple, not only on a custom color
+  const ink = readableOn(HEX.test(primary || '') ? primary : STANDARD, text) === 'black';
+  root.setProperty('--on-primary', ink ? '#111111' : '#ffffff'); root.setProperty('--on-primary-soft', ink ? '#2a2a2a' : '#e3e6e9');
   if (HEX.test(primary || '')) {
-    const ink = readableOn(primary, text) === 'black';
-    root.setProperty('--on-primary', ink ? '#111111' : '#ffffff'); root.setProperty('--on-primary-soft', ink ? '#2a2a2a' : '#e3e6e9');
     root.setProperty('--church-primary', primary); root.setProperty('--cc-purple', primary);
     root.setProperty('--church-secondary', `color-mix(in srgb, ${primary}, #ffffff 25%)`);
     // soft backgrounds, tabs, panels and borders take a light tint of the church's main color
