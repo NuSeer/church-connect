@@ -239,14 +239,17 @@ async function setupPushUI(){
  if(!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window)){status.textContent='Background notifications are unavailable in this browser.';return}
  if(!window.CHURCH_CONFIG?.vapidPublicKey){status.textContent='Push setup pending: add the public VAPID key in config.js.';return}
  const reg=await navigator.serviceWorker.register('./service-worker.js');
- const sub=await reg.pushManager.getSubscription();status.textContent=sub?'Background notifications enabled on this device.':'Enable notifications to receive messages when Church Connect is closed.';
+ const sub=await reg.pushManager.getSubscription();const stale=!!sub&&!sameKey(sub);status.textContent=stale?'Notifications need to be turned on again on this device. Tap Enable notifications.':sub?'Background notifications enabled on this device.':'Enable notifications to receive messages when Church Connect is closed.';
  button.disabled=false;off.disabled=!sub;
 }
+// A device subscribed with an older notification key must be re-subscribed with the current one.
+function sameKey(sub){const k=sub&&sub.options&&sub.options.applicationServerKey;if(!k)return true;const a=new Uint8Array(k),b=b64ToBytes(window.CHURCH_CONFIG.vapidPublicKey);return a.length===b.length&&a.every((x,i)=>x===b[i])}
 function b64ToBytes(value){const s=atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4));return Uint8Array.from(s,c=>c.charCodeAt(0))}
 $('enablePush').onclick=async()=>{const status=$('pushStatus');try{
  if(!me||!profile?.approved)throw Error('Sign in with an approved membership first.');
  const permission=await Notification.requestPermission();if(permission!=='granted')throw Error('Notification permission was not granted.');
  const reg=await navigator.serviceWorker.ready;
+ const old=await reg.pushManager.getSubscription();if(old&&!sameKey(old)){await db.from('member_push_subscriptions').delete().eq('user_id',me.id).eq('endpoint',old.endpoint);await old.unsubscribe()}
  const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToBytes(window.CHURCH_CONFIG.vapidPublicKey)});
  const json=sub.toJSON();const {error}=await db.from('member_push_subscriptions').upsert({user_id:me.id,endpoint:sub.endpoint,p256dh:json.keys.p256dh,auth:json.keys.auth,user_agent:navigator.userAgent},{onConflict:'endpoint'});
  if(error)throw error;status.textContent='Background notifications enabled on this device.';$('disablePush').disabled=false;

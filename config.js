@@ -19,7 +19,7 @@
   var NBOC = {
     supabaseUrl: 'https://vizcmyqyoaazkcytcunp.supabase.co',
     supabaseAnonKey: 'sb_publishable_ugyikgHimwHU3wGMFmxojg_qGYRCg61',
-    vapidPublicKey: 'BP38ZyxA9W__ujZDa_LenX8qd8Bgr0BaCFLpqmSo-YSD-kc2sNdoBhDEATbuiPjLvKNThE7umKf8YRwvFDBzj5U'
+    vapidPublicKey: 'BPY9qrXtRt2EGqN5pd-S-m_0a4_Bc-3BHEr0FaF78YOJeEXDpJ8QmKzF1Va97fXcMjMMl6QZ0CppPFsrIuyEnIk'
   };
   // The clean demo / platform environment (a separate, empty Supabase project). Public values only.
   var DEMO = {supabaseUrl: 'https://khnakybowzrfpqwakphi.supabase.co', supabaseAnonKey: 'sb_publishable_ftUugSYhXbtSHNLeY-e4vw_dIoNkHlN', vapidPublicKey: ''};
