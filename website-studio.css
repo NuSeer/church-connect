@@ -32,3 +32,5 @@ body:has(.sanctuary-toolbar) .studio-preview{position:sticky;top:88px;max-height
 @media(max-width:980px){body:has(.sanctuary-toolbar) .studio-layout{grid-template-columns:1fr}body:has(.sanctuary-toolbar) .studio-preview{position:static;max-height:none}.sanctuary-tabs{position:static}}
 
 .cc-preview-menu{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;padding:14px;background:var(--cc-primary,#53216d)}.cc-preview-menu a{color:#fff;font-size:12px;text-decoration:none}.cc-preview-menu a:hover{text-decoration:underline}#navigationPanel{scroll-margin-top:100px}
+
+.studio-preview-inner .cc-hero,.studio-preview-inner .cc-hero h2,.studio-preview-inner .cc-hero p,.studio-preview-inner .cc-hero .studio-name{color:var(--hero-ink,#fff)}

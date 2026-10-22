@@ -1,6 +1,6 @@
 import {db} from './data.js';
 const $=id=>document.getElementById(id),show=(id,on)=>$(id).classList.toggle('hidden',!on);
-const permissions=[['membership_view','View membership'],['membership_manage','Manage membership'],['ministry_view','View ministry administration'],['ministry_manage','Manage ministries'],['events_manage','Manage events'],['announcements_manage','Manage announcements'],['trustees_view','View trustees workspace']];
+const permissions=[['website_manage','Webmaster: website design, colors and church settings'],['membership_view','View membership'],['membership_manage','Manage membership'],['ministry_view','Ministry leader: view ministry administration'],['ministry_manage','Ministry leader: manage ministries'],['events_manage','Manage events'],['announcements_manage','Manage announcements'],['trustees_view','View trustees workspace']];
 let approved=[],delegations=[];
 function status(message){$('status').textContent=message}
 async function init(){if(!db)return status('Supabase is not configured.');const {data:{session},error}=await db.auth.getSession();if(error)return status(error.message);if(!session?.user){show('auth',true);show('workspace',false);return status('Sign in on this preview website to continue.')}const admin=await db.from('church_admins').select('user_id').eq('user_id',session.user.id).maybeSingle();if(admin.error||!admin.data){show('auth',false);show('workspace',false);return status('Administrator access required.')}show('auth',false);show('workspace',true);show('signout',true);await load();await loadSettings()}
@@ -31,17 +31,21 @@ import {applyColors} from './brand.js';
 const STD={p:'#4933a2',a:'#e0ae66'};
 async function loadColors(){
  const id=(await db.rpc('cc_my_church_id')).data;if(!id)return;
- const r=await db.from('churches').select('brand_primary,brand_accent').eq('id',id).maybeSingle();
+ let r=await db.from('churches').select('brand_primary,brand_accent,brand_text').eq('id',id).maybeSingle();
+ if(r.error)r=await db.from('churches').select('brand_primary,brand_accent').eq('id',id).maybeSingle();
  if(r.error||!r.data){$('colorsStatus').textContent='Colors need the latest database update (colors-migration.sql).';return}
- $('colorPrimary').value=r.data.brand_primary||STD.p;$('colorAccent').value=r.data.brand_accent||STD.a;
+ $('colorPrimary').value=r.data.brand_primary||STD.p;$('colorAccent').value=r.data.brand_accent||STD.a;setText(r.data.brand_text||'');
 }
-$('colorPrimary').oninput=$('colorAccent').oninput=()=>applyColors($('colorPrimary').value,$('colorAccent').value);
-async function saveColors(p,a,msg){
- const {error}=await db.rpc('cc_update_church_colors',{p_primary:p,p_accent:a});
+const getText=()=>document.querySelector('input[name=colorText]:checked')?.value||'';
+const setText=v=>{const r=document.querySelector('input[name=colorText][value="'+v+'"]');if(r)r.checked=true};
+const preview=()=>applyColors($('colorPrimary').value,$('colorAccent').value,getText());
+$('colorPrimary').oninput=$('colorAccent').oninput=preview;document.querySelectorAll('input[name=colorText]').forEach(r=>r.onchange=preview);
+async function saveColors(p,a,t,msg){
+ const {error}=await db.rpc('cc_update_church_colors',{p_primary:p,p_accent:a,p_text:t});
  $('colorsStatus').textContent=error?error.message:msg;
  return !error;
 }
-$('colorsForm').onsubmit=async ev=>{ev.preventDefault();await saveColors($('colorPrimary').value,$('colorAccent').value,'Saved. Your church colors now show across the app.')};
-$('colorsReset').onclick=async()=>{if(await saveColors('','','Back to the standard colors. Reload the page to see them.')){$('colorPrimary').value=STD.p;$('colorAccent').value=STD.a;applyColors(STD.p,STD.a)}};
+$('colorsForm').onsubmit=async ev=>{ev.preventDefault();await saveColors($('colorPrimary').value,$('colorAccent').value,getText(),'Saved. Your church colors now show across the app.')};
+$('colorsReset').onclick=async()=>{if(await saveColors('','','','Back to the standard colors. Reload the page to see them.')){$('colorPrimary').value=STD.p;$('colorAccent').value=STD.a;setText('');applyColors(STD.p,STD.a,'')}};
 await init();await loadColors().catch(()=>{});
 if(location.hash==='#churchColors')setTimeout(()=>$('churchColors')?.scrollIntoView({behavior:'smooth'}),300);
