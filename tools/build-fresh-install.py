@@ -88,7 +88,7 @@ open(os.path.join(out, '01-structure.sql'), 'w', encoding='utf-8', newline='\n')
 order = ['phase4-migration.sql', 'membership-migration.sql', 'directory-ministry-migration.sql', 'ministry-colors-migration.sql', 'phase3-4-migration.sql',
          'messaging-migration.sql', 'phase5-website-migration.sql', 'phase8-media-migration.sql', 'phase10-sms-migration.sql', 'phase11-push-migration.sql',
          'phase12-hardening-migration.sql', 'multichurch-migration.sql', 'broadcast-migration.sql', 'events-sync-migration.sql', 'photos-security-migration.sql',
-         'platform-migration.sql', 'colors-migration.sql']
+         'platform-migration.sql', 'colors-migration.sql', 'webmaster-migration.sql']
 p2 = ['-- Church Connect: new project setup, part 2 of 2 (features and first church). Run AFTER part 1.', '']
 for f in order:
     p2.append(f'-- ===== {f} =====')

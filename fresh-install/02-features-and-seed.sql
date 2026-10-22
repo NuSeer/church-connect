@@ -1335,31 +1335,54 @@ revoke all on function public.cc_platform_switch_church(uuid) from public;
 grant execute on function public.cc_platform_switch_church(uuid) to authenticated;
 
 -- ===== colors-migration.sql =====
--- Church Connect: each church chooses its own colors (Administration Center -> Church settings -> Colors).
+-- Church Connect: each church chooses its own colors (Administration Center -> Church colors).
 -- Safe to run more than once. Run on EVERY Church Connect Supabase project (your church's and the demo).
 alter table public.churches add column if not exists brand_primary text;
 alter table public.churches add column if not exists brand_accent text;
+alter table public.churches add column if not exists brand_text text;
 alter table public.churches drop constraint if exists churches_brand_primary_ck;
 alter table public.churches drop constraint if exists churches_brand_accent_ck;
+alter table public.churches drop constraint if exists churches_brand_text_ck;
 alter table public.churches add constraint churches_brand_primary_ck check (brand_primary is null or brand_primary ~ '^#[0-9a-f]{6}$');
 alter table public.churches add constraint churches_brand_accent_ck check (brand_accent is null or brand_accent ~ '^#[0-9a-f]{6}$');
+alter table public.churches add constraint churches_brand_text_ck check (brand_text is null or brand_text in ('white','black'));
 
--- Blank = the standard Church Connect colors. The main color carries white text, so it must be dark enough to read.
-create or replace function public.cc_update_church_colors(p_primary text, p_accent text) returns void
+-- Blank colors = the standard Church Connect colors. p_text is the lettering on the main color: 'white', 'black', or blank for
+-- automatic (the app picks whichever is easier to read).
+drop function if exists public.cc_update_church_colors(text,text);
+create or replace function public.cc_update_church_colors(p_primary text, p_accent text, p_text text default null) returns void
 language plpgsql security definer set search_path='' as $$
-declare v_p text := nullif(lower(trim(coalesce(p_primary,''))),''); v_a text := nullif(lower(trim(coalesce(p_accent,''))),''); v_lum numeric;
+declare v_p text := nullif(lower(trim(coalesce(p_primary,''))),''); v_a text := nullif(lower(trim(coalesce(p_accent,''))),''); v_t text := nullif(lower(trim(coalesce(p_text,''))),'');
 begin
  if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
- if v_p is not null then
-  if v_p !~ '^#[0-9a-f]{6}$' then raise exception 'Colors must look like #4933a2'; end if;
-  v_lum := (0.2126*('x'||substr(v_p,2,2))::bit(8)::int + 0.7152*('x'||substr(v_p,4,2))::bit(8)::int + 0.0722*('x'||substr(v_p,6,2))::bit(8)::int) / 255.0;
-  if v_lum > 0.6 then raise exception 'The main color is too light for white text. Choose a darker one.'; end if;
- end if;
+ if v_p is not null and v_p !~ '^#[0-9a-f]{6}$' then raise exception 'Colors must look like #4933a2'; end if;
  if v_a is not null and v_a !~ '^#[0-9a-f]{6}$' then raise exception 'Colors must look like #e0ae66'; end if;
- update public.churches set brand_primary = v_p, brand_accent = v_a where id = public.cc_my_church_id();
+ if v_t = 'auto' then v_t := null; end if;
+ if v_t is not null and v_t not in ('white','black') then raise exception 'Lettering must be white or black'; end if;
+ update public.churches set brand_primary = v_p, brand_accent = v_a, brand_text = v_t where id = public.cc_my_church_id();
 end $$;
-revoke all on function public.cc_update_church_colors(text,text) from public;
-grant execute on function public.cc_update_church_colors(text,text) to authenticated;
+revoke all on function public.cc_update_church_colors(text,text,text) from public;
+grant execute on function public.cc_update_church_colors(text,text,text) to authenticated;
+
+-- ===== webmaster-migration.sql =====
+-- Church Connect: a separate "Webmaster" staff permission (website design, colors and church settings), apart from ministry leaders.
+-- Safe to run more than once. Run on EVERY Church Connect Supabase project.
+alter table public.cc_staff_delegations drop constraint if exists cc_staff_delegations_permission_check;
+alter table public.cc_staff_delegations add constraint cc_staff_delegations_permission_check
+ check (permission in ('membership_view','membership_manage','ministry_view','ministry_manage','events_manage','announcements_manage','trustees_view','website_manage'));
+
+create or replace function public.cc_set_staff_delegation(p_user_id uuid,p_permission text,p_enabled boolean)
+returns void language plpgsql security definer set search_path='' as $$
+begin
+ if auth.uid() is null or not public.cc_is_admin() then raise exception 'Administrator access required'; end if;
+ if p_permission not in ('membership_view','membership_manage','ministry_view','ministry_manage','events_manage','announcements_manage','trustees_view','website_manage') then raise exception 'Unknown permission'; end if;
+ if not exists(select 1 from public.member_profiles where user_id=p_user_id and approved=true and church_id=public.cc_my_church_id()) then raise exception 'Select an approved registered member'; end if;
+ if p_enabled then
+  insert into public.cc_staff_delegations(user_id,permission,granted_by,church_id) values(p_user_id,p_permission,auth.uid(),public.cc_my_church_id()) on conflict(user_id,permission) do nothing;
+ else
+  delete from public.cc_staff_delegations where user_id=p_user_id and permission=p_permission and church_id=public.cc_my_church_id();
+ end if;
+end $$;
 
 -- ===== the first church of this project =====
 update public.churches set name = 'Church Connect' where name = 'Your Church';

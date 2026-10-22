@@ -11,7 +11,8 @@ export async function loadBrand() {
       let id = cfg.churchId || null;
       if (!id) { const {data: {session}} = await db.auth.getSession(); if (session) id = (await db.rpc('cc_my_church_id')).data || null }
       const pick = async cols => id ? await db.from('churches').select(cols).eq('id', id).maybeSingle() : await db.from('churches').select(cols).order('created_at').limit(2);
-      let r = await pick('id,name,website_url,brand_primary,brand_accent');
+      let r = await pick('id,name,website_url,brand_primary,brand_accent,brand_text');
+      if (r.error) r = await pick('id,name,website_url,brand_primary,brand_accent'); // lettering choice not set up yet
       if (r.error) r = await pick('id,name,website_url'); // colors not set up in the database yet
       if (r.error) r = await pick('id,name'); // older database: name only
       church = id ? r.data : (Array.isArray(r.data) && r.data.length === 1 ? r.data[0] : null);
@@ -21,16 +22,24 @@ export async function loadBrand() {
   document.querySelectorAll('[data-church]').forEach(el => { el.textContent = name });
   const site = String((church && church.website_url) || cfg.existingWebsiteUrl || '').trim();
   if (/^https:\/\//.test(site)) document.querySelectorAll('a[data-church-site]').forEach(a => { a.href = site; a.target = '_blank'; a.rel = 'noopener' });
-  applyColors(church && church.brand_primary, church && church.brand_accent);
-  window.CHURCH_BRAND = {name, website: site || null, churchId: church && church.id || null};
+  applyColors(church && church.brand_primary, church && church.brand_accent, church && church.brand_text);
+  window.CHURCH_BRAND = {name, website: site || null, churchId: church && church.id || null, primary: church && church.brand_primary || null, accent: church && church.brand_accent || null};
   return window.CHURCH_BRAND;
 }
 
 // A church's own colors replace the standard purple and gold. Anything that is not a plain #rrggbb value is ignored (standard look).
 const HEX = /^#[0-9a-f]{6}$/i;
-export function applyColors(primary, accent) {
+// 'white' or 'black' lettering for a background color: an explicit choice wins, otherwise whichever reads better.
+export function readableOn(color, choice) {
+  if (choice === 'white' || choice === 'black') return choice;
+  const n = parseInt(String(color).slice(1), 16), lum = (0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+  return lum > 0.55 ? 'black' : 'white';
+}
+export function applyColors(primary, accent, text) {
   const root = document.documentElement.style;
   if (HEX.test(primary || '')) {
+    const ink = readableOn(primary, text) === 'black';
+    root.setProperty('--on-primary', ink ? '#111111' : '#ffffff'); root.setProperty('--on-primary-soft', ink ? '#2a2a2a' : '#e3e6e9');
     root.setProperty('--church-primary', primary); root.setProperty('--cc-purple', primary);
     root.setProperty('--church-secondary', `color-mix(in srgb, ${primary}, #ffffff 25%)`);
     // soft backgrounds, tabs, panels and borders take a light tint of the church's main color
@@ -40,6 +49,7 @@ export function applyColors(primary, accent) {
     document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.setAttribute('content', primary));
   }
   if (HEX.test(accent || '')) {
+    root.setProperty('--on-accent', readableOn(accent) === 'black' ? '#1b1932' : '#ffffff');
     root.setProperty('--church-accent', accent); root.setProperty('--gold', accent);
     root.setProperty('--church-accent-tint', `color-mix(in srgb, ${accent} 18%, #ffffff)`); root.setProperty('--church-accent-ink', `color-mix(in srgb, ${accent} 55%, #000000)`);
   }
