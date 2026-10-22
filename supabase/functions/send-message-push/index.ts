@@ -1,4 +1,4 @@
-// Supabase Edge Function: database webhook on INSERT into public.messages.
+// Supabase Edge Function: database webhooks -> phone notifications (messages, broadcasts, approval alerts for administrators, and "you are approved" for new members).
 // Configure VERIFY_JWT=false for this webhook endpoint; authenticate with x-cc-webhook-secret.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import webpush from 'npm:web-push@3.6.7';
@@ -35,6 +35,16 @@ async function approvalAlert(title:string,body:string,churchId:string|null,key:s
  const {data:subs,error:se}=await db.from('member_push_subscriptions').select('id,endpoint,p256dh,auth').in('user_id',ids);if(se)throw se;
  return await deliver(subs||[],JSON.stringify({title,body:body.slice(0,120),page:'membership',messageId:id}));
 }
+// Tell a member (only that member) that an administrator approved them. Needs a webhook on member_profiles for UPDATE.
+async function approvedNotice(m:any,old:any){
+ if(!m?.user_id||m.approved!==true||old?.approved!==false)return new Response('Ignored',{status:200});
+ const id=await idFor('approved:'+m.user_id);
+ const {error:dupe}=await db.from('cc_push_deliveries').insert({message_id:id});
+ if(dupe?.code==='23505')return new Response('Duplicate',{status:200});if(dupe)throw dupe;
+ const {data:church}=m.church_id?await db.from('churches').select('name').eq('id',m.church_id).maybeSingle():{data:null};
+ const {data:subs,error:se}=await db.from('member_push_subscriptions').select('id,endpoint,p256dh,auth').eq('user_id',m.user_id);if(se)throw se;
+ return await deliver(subs||[],JSON.stringify({title:'You are approved!',body:`Welcome to ${String(church?.name||'your church').slice(0,80)}. Tap to open Church Connect.`,view:'updates',messageId:id}));
+}
 async function joinRequestAlert(m:any){
  if(!m?.user_id||!m?.ministry_id||m.status!=='pending')return new Response('Ignored',{status:200});
  const {data:ministry,error:me}=await db.from('ministries').select('name,church_id').eq('id',m.ministry_id).single();if(me||!ministry)throw me||Error('Ministry missing');
@@ -48,6 +58,7 @@ Deno.serve(async request=>{
   const event=await request.json();const m=event.record;
   if(event.type==='INSERT'&&event.table==='member_updates')return await broadcast(m);
   if(event.type==='INSERT'&&event.table==='member_profiles')return m?.approved===true?new Response('Ignored',{status:200}):await approvalAlert('New member waiting for approval',`${String(m?.display_name||'Someone').slice(0,60)} asked to join. Tap to review.`,m?.church_id??null,'profile:'+m?.user_id);
+  if(event.type==='UPDATE'&&event.table==='member_profiles')return await approvedNotice(m,event.old_record);
   if(event.type==='INSERT'&&event.table==='ministry_join_requests')return await joinRequestAlert(m);
   if(event.type!=='INSERT'||event.table!=='messages'||!m?.id||!m?.conversation_id||!m?.sender_id)return new Response('Ignored',{status:200});
   // Webhook retries must not notify twice: claim the message id first and stop if another delivery already did.

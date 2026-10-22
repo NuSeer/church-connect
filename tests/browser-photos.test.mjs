@@ -76,6 +76,8 @@ async function openProfile(st) { const r = await open('connect.html', st); await
   T('there is no Remove button yet', !(await shown(tab, '#photoRemove')));
   await tab.select('#gender', 'female');
   T('choosing Female shows the woman picture right away', /avatar-woman\.svg$/.test(await imgSrc(tab, '#myAvatar')));
+  await new Promise(r => setTimeout(r, 500));
+  T('choosing Female is saved straight away (no extra button needed)', rec.patches.some(p => p.gender === 'female') && /Saved/.test(await tab.evaluate(() => document.getElementById('photoStatus').textContent)), JSON.stringify(rec.patches));
   await tab.select('#gender', 'male');
   T('choosing Male shows the man picture', /avatar-man\.svg$/.test(await imgSrc(tab, '#myAvatar')));
   await tab.select('#gender', '');
