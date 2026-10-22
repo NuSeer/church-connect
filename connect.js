@@ -19,7 +19,9 @@ document.querySelectorAll('[data-toggle-password]').forEach(button=>button.addEv
 $('password').addEventListener('input',updatePasswordMatch);$('confirmPassword').addEventListener('input',updatePasswordMatch);
 $('register').onclick=()=>setRegistrationMode(!registrationMode);
 $('signForm').onsubmit=async ev=>{ev.preventDefault();if(!db)return;const email=$('email').value.trim(),password=$('password').value;if(registrationMode){if(password.length<8)return notice('Use a password of at least 8 characters.');if(password!==$('confirmPassword').value)return notice('Passwords do not match. Please enter them again.');const {error}=await db.auth.signUp({email,password});$('password').value='';$('confirmPassword').value='';if(error)return fail(error);setRegistrationMode(false);notice('Account requested. Verify your email if prompted, then sign in to complete your profile.');return}const {error}=await db.auth.signInWithPassword({email,password});$('password').value='';if(error)fail(error);else await init()};
-$('setupForm').onsubmit=async ev=>{ev.preventDefault();const {error}=await db.rpc('create_my_profile',{n:$('setupName').value.trim(),...(window.CHURCH_CONFIG?.churchId?{p_church:window.CHURCH_CONFIG.churchId}:{})});if(error)fail(error);else await init()};
+// Phone numbers: members type them the way they say them; we store the international form the text-message links need.
+function normalizePhone(v){const raw=String(v||'').trim();if(!raw)return '';const d=raw.replace(/\D/g,'');if(raw.startsWith('+'))return /^[1-9]\d{7,14}$/.test(d)?'+'+d:null;if(d.length===10)return '+1'+d;if(d.length===11&&d[0]==='1')return '+'+d;return null}
+$('setupForm').onsubmit=async ev=>{ev.preventDefault();const phone=normalizePhone($('setupPhone').value);if(phone===null)return fail({message:'Please enter your phone number like (757) 555-0123, or leave it blank.'});if($('setupSmsConsent').checked&&!phone)return fail({message:'Add a phone number, or untick the text-message box.'});const {error}=await db.rpc('create_my_profile',{n:$('setupName').value.trim(),...(window.CHURCH_CONFIG?.churchId?{p_church:window.CHURCH_CONFIG.churchId}:{})});if(error)fail(error);else{if(phone){const sp=await db.from('member_sms_preferences').upsert({user_id:(await db.auth.getUser()).data.user.id,phone,opted_in:$('setupSmsConsent').checked,has_app:true,updated_at:new Date().toISOString()},{onConflict:'user_id'});if(sp.error)console.warn('Phone not saved:',sp.error.message)}await init()}};
 $('pendingRefresh').onclick=init;$('logout').onclick=async()=>{if(channel)await db.removeChannel(channel);await db.auth.signOut();me=null;await init()};$('refresh').onclick=async()=>{const b=$('refresh'),was=b.textContent;b.disabled=true;b.textContent='Refreshing…';try{await load();await loadChats().catch(()=>{});document.dispatchEvent(new Event('cc:refresh'));b.textContent='Updated just now ✓'}catch(err){console.error(err);b.textContent='Could not refresh. Try again'}finally{b.disabled=false;setTimeout(()=>{b.textContent=was},2500)}};
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('hidden',x.id!==b.dataset.view))});
 
@@ -67,7 +69,7 @@ function renderMyPhoto(){
  $('photoRemove').classList.toggle('hidden',!profile.photo_path);
 }
 $('gender').onchange=()=>$('myAvatar').replaceChildren(myAvatarNow($('gender').value));
-$('photoFile').onchange=async ev=>{
+const onPhoto=async ev=>{
  const file=ev.target.files[0];ev.target.value='';if(!file)return;const st=$('photoStatus');st.textContent='Preparing your photo…';
  try{
   const path=`${profile.church_id}/${me.id}.jpg`;await uploadPhoto(db,path,file);
@@ -76,6 +78,9 @@ $('photoFile').onchange=async ev=>{
   renderMyPhoto();st.textContent='Photo saved. It is private until you tick "Show my photo to other church members".';
  }catch(err){st.textContent=err.message||'Could not save the photo.'}
 };
+$('photoFile').onchange=onPhoto;$('photoTake').onchange=onPhoto;
+// "Take a photo" opens the camera on phones and tablets; a computer only has the file picker, so it is shown just on touch devices.
+if(window.matchMedia&&matchMedia('(pointer:coarse)').matches)$('photoTakeBtn').classList.remove('hidden');
 $('photoRemove').onclick=async()=>{
  if(!confirm('Remove your photo?'))return;
  try{await removePhotoFile(db,profile.photo_path).catch(()=>{});const {error}=await db.from('member_profiles').update({photo_path:null,photo_visible:false}).eq('user_id',me.id);if(error)throw error;
@@ -199,7 +204,7 @@ await init();if(me&&profile?.approved)await openNotificationTarget();
 // Phase 10: consent-aware phone SMS handoff. This is not an SMS gateway.
 $('alsoText').onchange=()=>{show('smsModeWrap',$('alsoText').checked);show('smsTargetWrap',$('alsoText').checked)};
 async function loadSmsPreferences(){if(!db||!me)return;const {data,error}=await db.from('member_sms_preferences').select('phone,opted_in,has_app').eq('user_id',me.id).maybeSingle();if(error){$('smsPreferencesStatus').textContent='Text preferences unavailable: run phase10-sms-migration.sql';return}if(data){$('smsPhone').value=data.phone||'';$('smsConsent').checked=!!data.opted_in;$('smsHasApp').checked=!!data.has_app}}
-$('saveSmsPreferences').onclick=async()=>{const phone=$('smsPhone').value.trim(),consent=$('smsConsent').checked;if(phone&&!/^\+[1-9]\d{7,14}$/.test(phone))return $('smsPreferencesStatus').textContent='Enter an international-format phone number beginning with +.';if(consent&&!phone)return $('smsPreferencesStatus').textContent='Add a phone number before opting in.';const {error}=await db.from('member_sms_preferences').upsert({user_id:me.id,phone:phone||null,opted_in:consent,has_app:$('smsHasApp').checked,updated_at:new Date().toISOString()},{onConflict:'user_id'});$('smsPreferencesStatus').textContent=error?'Save failed: '+error.message:'Text preferences saved.'};
+$('saveSmsPreferences').onclick=async()=>{const phone=normalizePhone($('smsPhone').value),consent=$('smsConsent').checked;if(phone===null)return $('smsPreferencesStatus').textContent='Enter your phone number like (757) 555-0123.';if(consent&&!phone)return $('smsPreferencesStatus').textContent='Add a phone number before opting in.';const {error}=await db.from('member_sms_preferences').upsert({user_id:me.id,phone:phone||null,opted_in:consent,has_app:$('smsHasApp').checked,updated_at:new Date().toISOString()},{onConflict:'user_id'});$('smsPreferencesStatus').textContent=error?'Save failed: '+error.message:'Text preferences saved.'};
 async function preparePhoneSms(body,conversationId){
  const onlyWithoutApp=$('onlyWithoutApp').checked;
  const {data,error}=await db.rpc('cc_phone_sms_recipients',{p_conversation_id:conversationId,p_without_app:onlyWithoutApp});

@@ -83,7 +83,9 @@ async function openProfile(st) { const r = await open('connect.html', st); await
   await new Promise(r => setTimeout(r, 800));
   T('saving the profile stores the gender', rec.patches.some(p => p.gender === 'female'), JSON.stringify(rec.patches));
   T('the profile save never sends approval or church fields', rec.patches.every(p => !('approved' in p) && !('church_id' in p)), JSON.stringify(rec.patches));
-  const input = await tab.$('#photoFile'); await input.uploadFile(pic); await new Promise(r => setTimeout(r, 1800));
+  T('there are separate Take a photo (camera) and Choose a photo buttons', await tab.evaluate(() => document.getElementById('photoTake').getAttribute('capture') === 'user' && !document.getElementById('photoFile').hasAttribute('capture') && /Choose a photo/.test(document.getElementById('photoFile').parentElement.textContent) && /Take a photo/.test(document.getElementById('photoTake').parentElement.textContent)));
+  T('on a computer (no touch) only Choose a photo is shown', await tab.evaluate(() => document.getElementById('photoTakeBtn').classList.contains('hidden')));
+  const input = await tab.$('#photoTake'); await input.uploadFile(pic); await new Promise(r => setTimeout(r, 1800));
   T('a chosen photo is uploaded to the member\'s own private file', rec.uploads.length === 1 && rec.uploads[0].path === `${CHURCH}/${ME.id}.jpg`, JSON.stringify(rec.uploads));
   T('the profile records the photo location', rec.patches.some(p => p.photo_path === `${CHURCH}/${ME.id}.jpg`), JSON.stringify(rec.patches.slice(-2)));
   T('the new photo is shown (from a private link)', /object\/sign\/member-photos\//.test(await imgSrc(tab, '#myAvatar') || ''), await imgSrc(tab, '#myAvatar'));
