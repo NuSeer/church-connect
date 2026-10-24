@@ -464,7 +464,9 @@ export function createMessenger({ db, user, notice, openTab, unread, sms }) {
         );
       tools.append(
         button("Report", async () => {
-          const reason = prompt("Why are you reporting this message?");
+          const reason = prompt(
+            "Reporting this message:\n\nA church administrator will read this message and your reason. The other person is not told that you reported it. Please report only something that is wrong.\n\nWhy are you reporting it?",
+          );
           if (reason?.trim()) {
             await action("report", { message_id: m.id, reason });
             notice("Report submitted to church administrators.");
