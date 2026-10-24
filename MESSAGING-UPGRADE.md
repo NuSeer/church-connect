@@ -29,6 +29,19 @@ Run **messaging-plus-migration.sql** right after messaging-upgrade.sql (the desk
 
 One fix to the original upgrade: push subscription ids in this app are numbers, so the per-device push tracking uses bigint ids (the first version used uuid ids and would have failed on a real project).
 
+## Church groups, ministry homes and pastoral care (church-groups-migration.sql)
+
+Run **church-groups-migration.sql** after messaging-plus-migration.sql. It adds:
+
+- **Whole Church group.** Every approved member is in it automatically (new members join when approved; removed members leave). It is open chat by default. An administrator or pastor can switch it to announcements only. Anyone can mute it.
+- **Announcements.** The old Broadcast tab is now **Announcements** (leaders only). Members see them on **Home**.
+- **Ministry homes.** Each ministry has Schedule, Chat, Files and Members. A schedule card shows the date and details, Going / Maybe / Can't go with totals, files (music, sheets, flyers) and a discussion. Leaders add, change and delete cards. Changing the time posts a message in the discussion, so the group gets a phone alert. Every ministry now has its group chat created automatically.
+- **Pastoral care.** A member taps Pastoral care in Messages, sees exactly who will receive it, picks a topic and writes. The message becomes a private, confidential conversation with only that member and the care team (named by an administrator in the Administration Center; if none is named, the pastors; if none, the administrators). Nobody can add people to it. A member can send up to five a day.
+- **Five-tab navigation.** Home, Messages, Ministries, Events and Me (Profile, Directory, Giving, Help). Announcements, Admin and Platform appear only for people who have them.
+- **Voice note transcripts.** While recording, the phone or browser writes down what is said (where it can). The text is shown under the voice note and may contain mistakes. No paid service is used; browsers that cannot do this send the voice note without a transcript.
+- **Texts say replies are not shown in the app.** Every text started from the app ends with a note asking people to reply in Church Connect.
+- **Invite link.** The Administration Center has a link, a ready-made message and a Share button to bring people in. It costs nothing; new people still wait for approval.
+
 ## Update an existing project
 
 1. Back up the Supabase project. Publish this branch to a staging deployment first.

@@ -1,5 +1,5 @@
 // First-time tips: each section's introduction shows once with a "Got it" button, then stays hidden.
-// The Help tab lists them all again, and only the ones for the sections this person can actually see (Broadcast and Admin are role-based).
+// The Help tab lists them all again, and only the ones for the sections this person can actually see (Announcements and Admin are role-based).
 const KEY = 'cc-intro-seen';
 const read = () => { try { return JSON.parse(localStorage.getItem(KEY) || '[]') } catch { return [] } };
 const write = list => { try { localStorage.setItem(KEY, JSON.stringify(list)) } catch { /* private window: tips just show again next time */ } };

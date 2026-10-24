@@ -34,6 +34,8 @@ const UPDATES = [
   {id: 'u1000000-0000-0000-0000-000000000001', title: 'Old news', body: 'expired', created_at: day(-9), pinned: false, expires_at: day(-1), ministry_id: null},
   {id: 'u2000000-0000-0000-0000-000000000002', title: 'Newer note', body: 'recent', created_at: day(-1), pinned: false, expires_at: null, ministry_id: null},
   {id: 'u3000000-0000-0000-0000-000000000003', title: 'Pinned notice', body: 'important', created_at: day(-5), pinned: true, expires_at: null, ministry_id: null}];
+const MIN = 'm1000000-0000-0000-0000-000000000001';
+const ACT = {id: 'e5000000-0000-0000-0000-000000000005', ministry_id: MIN, title: 'Rehearsal', details: 'Bring your music', starts_at: day(3), conversation_id: 'c7000000-0000-0000-0000-000000000007', created_at: day(-1)};
 const YOUTH = [{conversation_id: 'c9000000-0000-0000-0000-000000000009', youth_id: 'y1000000-0000-0000-0000-000000000001', youth_name: 'Dan Young', kind: 'direct', label: 'Yara'}];
 
 async function scenario(name, fn, opts = {}) {
@@ -56,6 +58,16 @@ async function scenario(name, fn, opts = {}) {
     else if (rpc('cc_directory_rules')) if (opts.noRules) { code = 404; body = {code: 'PGRST202', message: 'Could not find the function public.cc_directory_rules in the schema cache'} } else body = [{user_id: HIDDEN, hidden: true, can_message: false, blocked_by_me: false}, {user_id: NOMSG, hidden: false, can_message: false, blocked_by_me: false}, {user_id: OKAY, hidden: false, can_message: true, blocked_by_me: false}];
     else if (rpc('cc_my_youth_conversations')) body = YOUTH;
     else if (rpc('cc_guardian_people')) body = [{user_id: 'y1000000-0000-0000-0000-000000000001', display_name: 'Dan Young'}, {user_id: 'y2000000-0000-0000-0000-000000000002', display_name: 'Yara Friend'}];
+    else if (rpc('my_conversation_unread_counts')) body = [{conversation_id: CHATS[1].id, unread_count: 3}];
+    else if (rpc('cc_care_recipients')) body = [{user_id: 'p1', display_name: 'Pat Pastor'}, {user_id: 'p2', display_name: 'Lee Leader'}];
+    else if (rpc('cc_send_pastoral_care')) { calls.push({fn: 'care', body: post()}); body = CHATS[1].id }
+    else if (rpc('cc_activity_overview')) body = [{activity_id: ACT.id, going: 2, maybe: 1, unable: 0, mine: null}];
+    else if (rpc('cc_ministry_roster')) body = [{user_id: 'l1', display_name: 'Lee Leader', is_leader: true}, {user_id: ME, display_name: 'Me Member', is_leader: false}];
+    else if (['cc_activity_rsvp', 'cc_save_ministry_activity'].some(rpc)) { calls.push({fn: p.split('/').pop(), body: post()}); body = null }
+    else if (p.endsWith('/rest/v1/ministry_members')) body = [{ministry_id: MIN, is_leader: true, ministries: {id: MIN, name: 'Choir', description: ''}}];
+    else if (p.endsWith('/rest/v1/ministry_activities')) body = [ACT];
+    else if (p.endsWith('/rest/v1/cc_activity_files')) body = [{id: 'f1000000-0000-0000-0000-000000000001', ministry_id: MIN, activity_id: ACT.id, name: 'Anthem.pdf', path: MIN + '/' + ACT.id + '/x-Anthem.pdf', created_at: day(-1)}];
+    else if (p.endsWith('/rest/v1/church_events')) body = [{id: 'e1000000-0000-0000-0000-000000000001', title: 'Sunday Worship', description: '', starts_at: day(2), location: 'Sanctuary', recurrence: 'none', published: true}];
     else if (rpc('cc_update_ack_summary')) body = [{update_id: 'u3', title: 'Pinned notice', created_at: day(-5), acked: 2, total: 5}];
     else if (['cc_respond_chat', 'cc_set_chat_mode', 'cc_set_my_birth_date', 'cc_ack_update', 'cc_send_broadcast', 'cc_broadcast_sms_recipients'].some(rpc)) { calls.push({fn: p.split('/').pop(), body: post()}); body = rpc('cc_send_broadcast') ? 'b0000000-0000-0000-0000-000000000001' : rpc('cc_broadcast_sms_recipients') ? [] : null }
     else if (p.endsWith('/rest/v1/member_profiles')) body = obj ? PROFILE : (u.searchParams.get('user_id') === 'eq.' + ME ? [PROFILE] : DIR);
@@ -95,7 +107,7 @@ await scenario('messages, requests, updates, directory and safety together', asy
   T('tapping it records the acknowledgment', calls.some(c => c.fn === 'cc_ack_update' && c.body.p_update_id === UPDATES[2].id), JSON.stringify(calls.filter(c => c.fn === 'cc_ack_update')));
   T('and shows "You have seen this"', /You have seen this/.test(await text(tab, '#updateList .list-item')));
 
-  await tab.click('[data-view="directory"]'); await tab.type('#directorySearch', 'ma'); await wait(300);
+  await tab.click('.tabs [data-view="profile"]'); await tab.click('#profile .me-nav [data-view="directory"]'); await tab.type('#directorySearch', 'ma'); await wait(300);
   const dir = await text(tab, '#directoryList');
   T('a member hidden by the rules is not listed', !/Mara Hidden/.test(dir), dir.slice(0, 160));
   T('a member not taking new messages shows a note instead of a Message button', await tab.evaluate(() => { const r = [...document.querySelectorAll('#directoryList .list-item')].find(x => /Marcus/.test(x.textContent)); return !!r && /Not taking new messages/.test(r.textContent) && ![...r.querySelectorAll('button')].some(b => b.textContent === 'Message') }));
@@ -127,10 +139,52 @@ await scenario('messages, requests, updates, directory and safety together', asy
   T('leaders see who has seen recent announcements', /2 of 5 members/.test(await text(tab, '#ackSummary')));
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 });
+await scenario('navigation, Home, ministry home and pastoral care', async (tab, calls, errors) => {
+  const tabs = await tab.evaluate(() => [...document.querySelectorAll('.tabs .tab:not(.hidden)')].map(x => x.textContent));
+  T('the main tabs are Home, Messages, Ministries, Events and Me, plus Announcements for leaders', JSON.stringify(tabs) === JSON.stringify(['Home', 'Messages', 'Ministries', 'Events', 'Me', 'Announcements']), JSON.stringify(tabs));
+  const home = await text(tab, '#homeCards');
+  T('Home shows the important notice', /Important notice/.test(home) && /Pinned notice/.test(home), home.slice(0, 160));
+  T('Home shows the next event', /Next event/.test(home) && /Sunday Worship/.test(home), home.slice(0, 260));
+  T('Home shows conversations with new messages', /Choir · 3 new/.test(home), home.slice(0, 300));
+  T('Home shows reminders from my ministries', /From your ministries/.test(home) && /Rehearsal/.test(home), home.slice(0, 400));
+  await tab.click('.tabs [data-view="profile"]');
+  T('Me opens the profile with Profile, Directory, Giving and Help', await tab.evaluate(() => ['Profile', 'Directory', 'Giving', 'Help'].every(t => [...document.querySelectorAll('#profile .me-nav .chip')].some(c => c.textContent === t))));
+  await tab.click('#profile .me-nav [data-view="directory"]');
+  T('choosing Directory opens it and keeps Me lit', await tab.evaluate(() => !document.getElementById('directory').classList.contains('hidden') && document.getElementById('meTab').classList.contains('active')));
+
+  await tab.click('.tabs [data-view="messages"]'); await wait(200);
+  await tab.click('#pastoralCare'); await wait(900);
+  const dlg = await text(tab, '#careDialog');
+  T('pastoral care names exactly who will receive it', /This goes only to: Pat Pastor, Lee Leader/.test(dlg), dlg.slice(0, 200));
+  await tab.type('#careBody', 'Please pray for my family.');
+  await tab.evaluate(() => document.querySelector('#careDialog form').requestSubmit()); await wait(800);
+  const care = calls.find(c => c.fn === 'care');
+  T('sending it uses the confidential channel with the chosen topic', care && care.body.p_topic === 'Prayer request' && care.body.p_body === 'Please pray for my family.', JSON.stringify(care));
+
+  await tab.click('.tabs [data-view="ministries"]'); await wait(300);
+  await tab.evaluate(() => [...document.querySelectorAll('#ministryList button')].find(b => /Open workspace/.test(b.textContent)).click()); await wait(1000);
+  const ws = await text(tab, '#ministryWorkspace');
+  T('the ministry home has Schedule, Chat, Files and Members', await tab.evaluate(() => ['Schedule', 'Chat', 'Files', 'Members'].every(t => [...document.querySelectorAll('#ministryWorkspace .chip')].some(c => c.textContent === t))), ws.slice(0, 120));
+  T('the schedule card shows the date, details, RSVP totals and its file', /Rehearsal/.test(ws) && /Bring your music/.test(ws) && /2 going, 1 maybe/.test(ws) && /Anthem\.pdf/.test(ws), ws.slice(0, 300));
+  T('the card has a discussion button', await tab.evaluate(() => [...document.querySelectorAll('#ministryWorkspace button')].some(b => b.textContent === 'Discussion')));
+  await tab.evaluate(() => [...document.querySelectorAll('#ministryWorkspace .rsvp-btn')].find(b => b.textContent === 'Going').click()); await wait(700);
+  T('Going is saved for that activity', calls.some(c => c.fn === 'cc_activity_rsvp' && c.body.p_activity === ACT.id && c.body.p_response === 'going'), JSON.stringify(calls.filter(c => c.fn === 'cc_activity_rsvp')));
+  T('a leader can add to the schedule', /Add to the schedule/.test(await text(tab, '#ministryWorkspace')));
+  await tab.type('#ministryWorkspace .cc-activity-form input:not([type])', 'Sunday music');
+  await tab.evaluate(() => { const i = document.querySelector('#ministryWorkspace .cc-activity-form input[type=datetime-local]'); i.value = '2026-12-06T09:00'; });
+  await tab.evaluate(() => document.querySelector('#ministryWorkspace .cc-activity-form').requestSubmit()); await wait(800);
+  const saved = calls.find(c => c.fn === 'cc_save_ministry_activity');
+  T('saving it sends the title, time and the "tell the group" choice', saved && saved.body.p_title === 'Sunday music' && saved.body.p_ministry === MIN && saved.body.p_notify === true && saved.body.p_id === null, JSON.stringify(saved));
+  await tab.evaluate(() => [...document.querySelectorAll('#ministryWorkspace .chip')].find(c => c.textContent === 'Files').click()); await wait(500);
+  T('Files lists the ministry files', /Anthem\.pdf/.test(await text(tab, '#ministryWorkspace')));
+  await tab.evaluate(() => [...document.querySelectorAll('#ministryWorkspace .chip')].find(c => c.textContent === 'Members').click()); await wait(500);
+  T('Members lists people and marks leaders', /Lee Leader · Leader/.test(await text(tab, '#ministryWorkspace')));
+  T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 300));
+});
 await scenario('a project without the safety update still works', async (tab, calls, errors) => {
   T('portal opened', await tab.evaluate(() => !document.getElementById('portal').classList.contains('hidden')));
   T('Messages and safety stays hidden', await tab.evaluate(() => document.getElementById('safetySection').classList.contains('hidden')));
-  T('everyone is still listed with a Message button', await (async () => { await tab.click('[data-view="directory"]'); await tab.type('#directorySearch', 'ma'); await wait(300); return tab.evaluate(() => [...document.querySelectorAll('#directoryList button')].filter(b => b.textContent === 'Message').length === 3) })());
+  T('everyone is still listed with a Message button', await (async () => { await tab.click('.tabs [data-view="profile"]'); await tab.click('#profile .me-nav [data-view="directory"]'); await tab.type('#directorySearch', 'ma'); await wait(300); return tab.evaluate(() => [...document.querySelectorAll('#directoryList button')].filter(b => b.textContent === 'Message').length === 3) })());
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 }, {noRules: true});
 await browser.close(); server.close();

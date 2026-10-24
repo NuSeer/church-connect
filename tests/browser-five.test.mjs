@@ -83,7 +83,7 @@ const vis = (tab, sel) => tab.evaluate(s => { const e = document.querySelector(s
   T('another section still shows its own tip the first time', await (async () => { await tab.click('[data-view="events"]'); return await vis(tab, '#events .cc-intro') })());
   await tab.click('[data-view="help"]');
   const help = await tab.evaluate(() => [...document.querySelectorAll('#helpList .cc-help-item strong')].map(x => x.textContent.trim()));
-  T('Help lists the member sections', ['Updates.', 'Events.', 'Messages.', 'Ministries.', 'Directory.', 'My Profile.', 'My Giving.'].every(x => help.includes(x)), help.join(','));
+  T('Help lists the member sections', ['Home.', 'Events.', 'Messages.', 'Ministries.', 'Directory.', 'My Profile.', 'My Giving.'].every(x => help.includes(x)), help.join(','));
   T('a member does not see Broadcast or Admin help, and nothing about Platform', !help.includes('Broadcast.') && !help.includes('Admin.') && !help.some(x => /platform/i.test(x)));
   const allText = await text(tab, '#help');
   T('no Platform wording anywhere in the Help tab', !/platform/i.test(allText), allText.slice(0, 200));
@@ -103,7 +103,7 @@ const vis = (tab, sel) => tab.evaluate(s => { const e = document.querySelector(s
   const {tab} = await open('connect.html', {isAdmin: true});
   await tab.click('[data-view="help"]');
   const help = await tab.evaluate(() => [...document.querySelectorAll('#helpList .cc-help-item strong')].map(x => x.textContent.trim()));
-  T('an administrator sees the Broadcast and Admin help', help.includes('Broadcast.') && help.includes('Admin.'), help.join(','));
+  T('an administrator sees the Announcements and Admin help', help.includes('Announcements.') && help.includes('Admin.'), help.join(','));
   await tab.close();
 }
 

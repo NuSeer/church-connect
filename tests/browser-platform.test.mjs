@@ -150,10 +150,10 @@ T('addresses map to environments (NBOC has its own; unknown addresses use the de
 // ---------------- Introductions on each section ----------------
 { const {tab} = await open('connect.html', {isAdmin: true, platform: true, overview: []});
   const intro = id => tab.evaluate(i => document.querySelector('#' + i + ' .cc-intro')?.textContent || '', id);
-  for (const [id, word] of [['updates', 'Updates'], ['events', 'Events'], ['messages', 'Messages'], ['ministries', 'Ministries'], ['directory', 'Directory'], ['profile', 'My Profile'], ['giving', 'My Giving'], ['broadcast', 'Broadcast'], ['admin', 'Admin']]) {
+  for (const [id, word] of [['updates', 'Home'], ['events', 'Events'], ['messages', 'Messages'], ['ministries', 'Ministries'], ['directory', 'Directory'], ['profile', 'My Profile'], ['giving', 'My Giving'], ['broadcast', 'Announcements'], ['admin', 'Admin']]) {
     const t = await intro(id); T('the ' + word + ' section starts with a short introduction', t.startsWith(word) && t.length > 60 && t.length < 400, t.slice(0, 80)) }
   T('the Platform section has no introduction or explanatory text for anyone', await tab.evaluate(() => !document.querySelector('#platform .cc-intro') && !/For the platform owner/.test(document.getElementById('platform').textContent)));
-  T('the Broadcast and Admin introductions say who can see them', /administrators, pastors and approved broadcasters/.test(await intro('broadcast')) && /administrators and pastors/.test(await intro('admin')));
+  T('the Announcements and Admin introductions say who can see them', /administrators, pastors and approved senders/.test(await intro('broadcast')) && /administrators and pastors/.test(await intro('admin')));
   await tab.close() }
 { const {tab} = await open('connect.html', {});
   T('an ordinary member sees no Broadcast, Admin or Platform tab (so none of their text)', await tab.evaluate(() => ['broadcastTab', 'adminTab', 'platformTab'].every(id => document.getElementById(id).classList.contains('hidden')))); await tab.close() }

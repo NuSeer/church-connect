@@ -106,7 +106,7 @@ export function createMessenger({ db, user, notice, openTab, unread, sms }) {
     const q = $("chatSearch").value.toLowerCase();
     const box = $("conversationList");
     box.replaceChildren();
-    for (const c of chats.filter(
+    for (const c of [...chats].sort((a, b) => (b.whole_church ? 1 : 0) - (a.whole_church ? 1 : 0)).filter(
       (c) =>
         (filter === "archived" ? c.archived : !c.archived) &&
         (filter !== "unread" || (unread.counts?.get(c.id) || 0) > 0) &&
@@ -221,7 +221,9 @@ export function createMessenger({ db, user, notice, openTab, unread, sms }) {
       (c.announcement_only && !c.can_manage) ||
       (c.status === "request" && c.requested_by !== uid());
     $("sendMessage").disabled = $("messageBody").disabled;
-    $("chatMode").textContent = c.archived
+    $("chatMode").textContent = c.confidential
+      ? "Confidential · only you and the people named in this conversation can see it"
+      : c.archived
       ? "Archived · read only"
       : c.announcement_only
         ? "Leader announcements · members can react and acknowledge"
@@ -377,6 +379,8 @@ export function createMessenger({ db, user, notice, openTab, unread, sms }) {
           },
         );
         row.append(b);
+        if (m.attachment.transcript)
+          row.append(node("p", "Transcript (made automatically, may have mistakes): " + m.attachment.transcript, "small muted"));
       }
       if (m.poll) {
         row.append(node("strong", m.poll.question));
@@ -619,11 +623,32 @@ export function createMessenger({ db, user, notice, openTab, unread, sms }) {
       throw Error("Voice recording is unavailable in this browser.");
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const parts = [];
+    // A written copy of the voice note, made by the phone or browser as the person speaks. It may have mistakes, and some browsers cannot do it.
+    let transcript = "", listener = null;
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (Speech) {
+      try {
+        listener = new Speech();
+        listener.continuous = true;
+        listener.interimResults = false;
+        listener.lang = navigator.language || "en-US";
+        listener.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++)
+            if (e.results[i].isFinal) transcript += e.results[i][0].transcript + " ";
+        };
+        listener.onerror = () => {};
+        listener.start();
+      } catch {
+        listener = null;
+      }
+    }
     recording = new MediaRecorder(stream);
     const current = recording;
     current.ondataavailable = (e) => parts.push(e.data);
     current.onstop = async () => {
       clearTimeout(current.timer);
+      try { listener?.stop(); } catch {}
+      await new Promise((r) => setTimeout(r, 400));
       stream.getTracks().forEach((t) => t.stop());
       recording = null;
       $("recordVoice").textContent = "Voice note";
@@ -636,6 +661,10 @@ export function createMessenger({ db, user, notice, openTab, unread, sms }) {
             { type },
           ),
         );
+        if (attachment && transcript.trim()) {
+          attachment.transcript = transcript.trim().slice(0, 4000);
+          renderContext();
+        }
       } catch (e) {
         notice(e.message);
       }
