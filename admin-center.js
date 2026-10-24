@@ -49,3 +49,20 @@ $('colorsForm').onsubmit=async ev=>{ev.preventDefault();await saveColors($('colo
 $('colorsReset').onclick=async()=>{if(await saveColors('','','','Back to the standard colors. Reload the page to see them.')){$('colorPrimary').value=STD.p;$('colorAccent').value=STD.a;setText('');applyColors(STD.p,STD.a,'')}};
 await init();await loadColors().catch(()=>{});
 if(location.hash==='#churchColors')setTimeout(()=>$('churchColors')?.scrollIntoView({behavior:'smooth'}),300);
+
+// Messaging health. The words mean different things: "accepted" = the phone company's push service took the notification (not proof it was seen);
+// "read" and "I've seen this" come from the person tapping inside the app.
+async function loadMessagingHealth(){
+ const box=$('messagingHealth');if(!box)return;
+ const {data,error}=await db.rpc('cc_messaging_health');box.replaceChildren();
+ if(error){box.textContent='Messaging health unavailable: '+error.message;return}
+ const line=(text)=>{const p=document.createElement('p');p.textContent=text;return p};
+ const push=data?.push||{},n=k=>Number(push[k]||0);
+ if(data?.approved_members!==undefined)box.append(line(`Members with notifications turned on: ${data.members_with_devices||0} of ${data.approved_members}.`+(data.approved_members-data.members_with_devices>0?` ${data.approved_members-data.members_with_devices} have not turned them on yet.`:'')));
+ box.append(line(`Last 7 days: ${n('accepted')} notification${n('accepted')===1?'':'s'} accepted by the phone service · ${n('pending')} waiting to be tried again · ${n('sending')} being sent now · ${n('expired')} old device${n('expired')===1?'':'s'} removed.`));
+ if(data?.open_requests!==undefined)box.append(line(`Message requests waiting for a member to accept: ${data.open_requests}.`));
+ const head=document.createElement('h3');head.textContent='Reported messages';box.append(head);
+ for(const report of data?.reports||[]){const row=document.createElement('div');row.className='list-item';const text=document.createElement('p');text.textContent=(report.title||'Conversation')+' · '+new Date(report.created_at).toLocaleString()+' — '+report.reason;const message=document.createElement('blockquote');message.textContent=report.body;row.append(text,message);box.append(row)}
+ if(!data?.reports?.length)box.append(line('No reported messages.'));
+}
+$('refreshMessagingHealth')?.addEventListener('click',loadMessagingHealth);

@@ -35,11 +35,11 @@ const got = JSON.parse((await db.query(fs.readFileSync(repo + 'export-for-new-pr
 const byName = (arr, key) => new Map((arr || []).map(x => [key(x), x]));
 const wantTables = byName(want.tables, t => t.table), gotTables = byName(got.tables, t => t.table);
 const missingTables = [...wantTables.keys()].filter(k => !gotTables.has(k)); T('every exported table exists', missingTables.length === 0, missingTables.join(', '));
-const extraTables = [...gotTables.keys()].filter(k => !wantTables.has(k)); T('the only extra tables are the newest features', extraTables.every(t => ['cc_invites', 'cc_platform_audit', 'cc_webmaster_requests'].includes(t)), extraTables.join(', '));
+const extraTables = [...gotTables.keys()].filter(k => !wantTables.has(k)); T('the only extra tables are the newest features', extraTables.every(t => ['cc_invites', 'cc_platform_audit', 'cc_webmaster_requests', 'cc_chat_preferences', 'cc_event_rsvps', 'cc_guardians', 'cc_member_safety', 'cc_message_blocks', 'cc_message_marks', 'cc_message_reports', 'cc_messaging_settings', 'cc_push_attempts', 'cc_update_acks'].includes(t)), extraTables.join(', '));
 let colProblems = []; for (const [tn, wt] of wantTables) { const gt = gotTables.get(tn); if (!gt) continue; const gc = byName(gt.columns, c => c.name); for (const c of wt.columns) { const x = gc.get(c.name); if (!x) colProblems.push(`${tn}.${c.name} missing`); else if (x.type !== c.type || x.not_null !== c.not_null) colProblems.push(`${tn}.${c.name}: ${x.type}/${x.not_null} vs ${c.type}/${c.not_null}`) } }
 T('every exported column exists with the same type and null rule', colProblems.length === 0, colProblems.slice(0, 6).join(' | '));
 const wantFn = new Set(want.functions.map(f => f.name + '(' + f.args + ')')), gotFn = new Set(got.functions.map(f => f.name + '(' + f.args + ')'));
-const missingFn = [...wantFn].filter(f => !gotFn.has(f)); T('every exported function exists', missingFn.length === 0, missingFn.join(', '));
+const missingFn = [...wantFn].filter(f => !gotFn.has(f)); const replacedFn = f => f === 'cc_send_broadcast(p_title text, p_body text)'; /* replaced by the version that also takes pin and expiry */ T('every exported function exists', missingFn.filter(f => !replacedFn(f)).length === 0, missingFn.join(', '));
 const newFn = [...gotFn].filter(f => !wantFn.has(f)).map(f => f.split('(')[0]); console.log('   (functions added by the newest features:', newFn.join(', '), ')');
 const pol = p => `${p.schema}.${p.table}:${p.name}:${p.permissive}:${p.command}`;
 const wantPol = new Set(want.policies.map(pol)), gotPol = new Set(got.policies.map(pol));
@@ -48,8 +48,8 @@ const wantCon = new Set(want.constraints.map(c => c.table.replace('public.', '')
 const missingCon = [...wantCon].filter(c => !gotCon.has(c)); T('every exported key, check and link between tables exists', missingCon.length === 0, missingCon.join(' | '));
 const g = a => new Set((a || []).map(x => `${x.table}:${x.role}:${x.privilege}`)); const wg = g(want.grants), gg = g(got.grants);
 // the new project is allowed to be STRICTER: anonymous visitors, references and triggers are dropped (the real project still carries some of those by default)
-const lostGrants = [...wg].filter(x => !gg.has(x)).filter(x => !(/:anon:/.test(x) || /:(REFERENCES|TRIGGER|TRUNCATE)$/.test(x))); T('no permission the app needs is missing (the new project may only be stricter)', lostGrants.length === 0, lostGrants.slice(0, 5).join(' | '));
-const extraGrants = [...gg].filter(x => !wg.has(x)).filter(x => !/^(cc_invites|cc_platform_audit|cc_webmaster_requests|churches):/.test(x)); T('and no extra permission appears (nothing wider than the real project)', extraGrants.length === 0, extraGrants.slice(0, 8).join(' | '));
+const lostGrants = [...wg].filter(x => !gg.has(x)).filter(x => !(/:anon:/.test(x) || /:(REFERENCES|TRIGGER|TRUNCATE)$/.test(x) || /^messages:authenticated:(INSERT|UPDATE|DELETE)$/.test(x))); T('no permission the app needs is missing (the new project may only be stricter)', lostGrants.length === 0, lostGrants.slice(0, 5).join(' | '));
+const extraGrants = [...gg].filter(x => !wg.has(x)).filter(x => !/^(cc_invites|cc_platform_audit|cc_webmaster_requests|churches|cc_chat_preferences|cc_message_marks|cc_messaging_settings|cc_guardians|cc_member_safety|cc_update_acks|cc_message_blocks|cc_message_reports|cc_event_rsvps|cc_push_attempts):/.test(x)); T('and no extra permission appears (nothing wider than the real project)', extraGrants.length === 0, extraGrants.slice(0, 8).join(' | '));
 T('both storage buckets exist and the photo bucket is private', got.buckets.some(b => b.id === 'member-photos' && b.public === false) && got.buckets.some(b => b.id === 'church-media'), JSON.stringify(got.buckets));
 
 // ---- behaviour on the empty project

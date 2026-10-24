@@ -75,9 +75,9 @@ T('the start page it points to exists', fs.existsSync(path.join(root, 'connect.h
   T('administrator/pastor sees the Admin tab', await vis(tab, '#adminTab'));
   await tab.click('#adminTab');
   const links = await tab.evaluate(() => [...document.querySelectorAll('#admin a.btn')].map(a => a.getAttribute('href')));
-  T('it lists every admin page', JSON.stringify(links) === JSON.stringify(['admin-center.html', 'admin.html', 'membership.html', 'ministries-admin.html', 'website-editor.html']), JSON.stringify(links));
+  T('it lists every admin page', JSON.stringify(links) === JSON.stringify(['admin-center.html', 'admin-center.html#churchColors', 'admin.html', 'membership.html', 'ministries-admin.html', 'website-editor.html']), JSON.stringify(links));
   T('the other tabs are hidden while it is open', await tab.evaluate(() => document.getElementById('updates').classList.contains('hidden') && !document.getElementById('admin').classList.contains('hidden')));
-  T('every link goes to a page that exists', links.every(l => fs.existsSync(path.join(root, l))));
+  T('every link goes to a page that exists', links.every(l => fs.existsSync(path.join(root, l.split('#')[0]))));
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 160)); await tab.close() }
 { const {tab, errors} = await open('connect.html', {isAdmin: false});
   T('an ordinary member does NOT see the Admin tab', !(await vis(tab, '#adminTab')));

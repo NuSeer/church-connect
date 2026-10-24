@@ -3,6 +3,8 @@
 import {db, readPublic, occurrences, escapeHTML as e, fmt} from './data.js';
 const $ = id => document.getElementById(id);
 let month = new Date(), all = [];
+let isAdmin = false;
+db?.rpc('cc_is_admin').then(r => { isAdmin = r.data === true });
 month.setDate(1);
 
 function ics(x) {
@@ -23,7 +25,12 @@ function details(items, heading) {
     const m = document.createElement('div'); m.className = 'small muted'; m.textContent = fmt(x.occurs_at) + ' · ' + (x.location || 'Location TBA'); d.append(s, m);
     if (x.description) { const p = document.createElement('p'); p.className = 'small'; p.textContent = x.description; d.append(p) }
     const b = document.createElement('button'); b.className = 'btn secondary'; b.textContent = 'Add to calendar'; b.onclick = () => ics(x);
-    row.append(d, b); box.append(row);
+    row.append(d, b);
+    if(db){const select=document.createElement('select');select.setAttribute('aria-label','Your RSVP for '+x.title);for(const [value,label] of [['','RSVP…'],['going','Going'],['maybe','Maybe'],['unable','Unable to attend']])select.add(new Option(label,value));
+    const status=document.createElement('span');status.className='small muted';status.setAttribute('role','status');
+    db.from('cc_event_rsvps').select('response').eq('event_id',x.id).then(r=>{if(!r.error&&r.data?.length)select.value=r.data[0].response});
+    select.onchange=async()=>{if(!select.value)return;select.disabled=true;const r=await db.rpc('cc_event_rsvp',{p_event:x.id,p_response:select.value});status.textContent=r.error?'Could not save RSVP: '+r.error.message:'RSVP saved';select.disabled=false};row.append(select,status);if(isAdmin){const who=document.createElement('button');who.type='button';who.className='btn secondary';who.textContent='Who is coming';who.onclick=async()=>{const r=await db.rpc('cc_event_rsvp_names',{p_event:x.id});const p=document.createElement('p');p.className='small';p.textContent=r.error?r.error.message:(r.data||[]).length?r.data.map(n=>n.display_name+' ('+({going:'going',maybe:'maybe',unable:"can't go"}[n.response]||n.response)+')').join(', '):'No answers yet.';who.replaceWith(p)};row.append(who)}}
+    box.append(row);
   }
 }
 function render() {
