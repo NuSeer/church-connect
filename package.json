@@ -1,0 +1,13 @@
+{
+  "name": "church-connect",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/messaging-upgrade.test.mjs && node tests/messaging-plus.test.mjs && node tests/church-groups.test.mjs && node tests/edge-functions.test.mjs",
+    "test:messaging": "node tests/messaging-upgrade.test.mjs && node tests/messaging-plus.test.mjs && node tests/church-groups.test.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.11",
+    "esbuild": "0.28.2"
+  }
+}

@@ -1,0 +1,209 @@
+/* Messaging shares Church Connect branding and remains usable at phone sizes. */
+.chat-toolbar,
+.message-actions,
+.message-reactions,
+.chat-compose-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.chat-toolbar {
+  margin: 12px 0;
+}
+.chat-toolbar input {
+  flex: 1;
+  min-width: 150px;
+}
+.chat-row {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  text-align: left;
+  padding: 14px;
+  border: 0;
+  border-bottom: 1px solid #dde3ec;
+  background: transparent;
+  color: inherit;
+  align-items: center;
+  cursor: pointer;
+}
+.chat-row:hover,
+.chat-row.selected {
+  background: #eef2ff;
+}
+.chat-preview {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.chat-preview span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 210px;
+}
+.chat-avatar {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #e1e7f4;
+  color: #26395d;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.chat-count {
+  display: block;
+  background: #344ca0;
+  color: white;
+  border-radius: 20px;
+  padding: 2px 7px;
+  text-align: center;
+  margin-top: 4px;
+}
+.chat-message {
+  padding: 16px;
+  margin: 12px 0;
+  border-radius: 14px;
+  background: #f1f4f9;
+  border: 1px solid #dbe2ec;
+  max-width: 94%;
+  overflow-wrap: anywhere;
+}
+.chat-message.own {
+  margin-left: auto;
+  background: #e9edff;
+}
+.chat-message.pinned {
+  border-left: 4px solid #b28a3f;
+}
+.chat-message p {
+  white-space: pre-wrap;
+  margin: 8px 0;
+}
+.message-meta {
+  font-size: 0.8rem;
+  color: #526079;
+}
+.chat-message blockquote {
+  border-left: 3px solid #8e9ab4;
+  margin: 6px 0;
+  padding: 6px 10px;
+  color: #526079;
+  font-size: 0.85rem;
+}
+.message-actions .btn,
+.message-reactions .btn {
+  font-size: 0.78rem;
+  padding: 5px 8px;
+  min-height: 32px;
+}
+.message-actions {
+  margin-top: 10px;
+}
+.message-reactions button[aria-pressed="true"] {
+  background: #d1dcff;
+  outline: 2px solid #526ac0;
+}
+.chat-image {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  margin: 10px 0;
+}
+.chat-message audio {
+  max-width: 100%;
+  display: block;
+}
+.message-list {
+  min-height: 260px;
+  max-height: 55vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.chat-compose-tools {
+  margin: 10px 0;
+}
+.chat-context {
+  font-size: 0.85rem;
+  padding: 5px 0;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+#pinnedMessages {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+#chatDetails {
+  padding: 16px;
+  background: #f2f5fa;
+  border-radius: 12px;
+  margin: 12px 0;
+}
+#chatDialog {
+  border: 1px solid #d3dce9;
+  border-radius: 18px;
+  padding: 26px;
+  max-width: 560px;
+  width: 90vw;
+  max-height: 80vh;
+  overflow: auto;
+  color: #17253b;
+  background: white;
+}
+#chatDialog::backdrop {
+  background: #14203988;
+}
+#chatDialog label {
+  display: block;
+  margin: 12px 0;
+}
+#chatDialog button {
+  margin: 5px;
+}
+.message-list:focus {
+  outline: 2px solid #6175bc;
+}
+.chat-large-text .chat-message {
+  font-size: 1.2rem;
+}
+@media (max-width: 700px) {
+  .connect-layout {
+    display: block !important;
+  }
+  .connect-layout aside {
+    max-height: 240px;
+    overflow: auto;
+    margin-bottom: 16px;
+  }
+  .chat-message {
+    max-width: 100%;
+  }
+  .chat-preview span {
+    max-width: 55vw;
+  }
+  .chat-toolbar .btn {
+    padding: 8px;
+  }
+  .message-list {
+    max-height: 50vh;
+  }
+  #messages {
+    padding: 12px;
+  }
+}
+.new-message-divider {
+  text-align: center;
+  color: #465da5;
+  font-size: 0.8rem;
+  border-top: 1px solid #aab7de;
+  margin: 18px 0;
+  padding-top: 8px;
+  font-weight: 700;
+}

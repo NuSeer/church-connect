@@ -1,0 +1,5 @@
+node_modules/
+.openai/
+*.log
+preview-dist/
+/node_modules

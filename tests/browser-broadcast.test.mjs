@@ -67,6 +67,7 @@ await scenario('administrator / pastor (server says yes)', true, async (tab, cal
   const links = await tab.evaluate(() => [...document.querySelectorAll('#broadcastSms a')].map(a => a.getAttribute('href')));
   T('one-at-a-time mode gives one text button per person (2)', links.length === 2, JSON.stringify(links));
   T('each button is an sms: link carrying the message', links.every(l => l.startsWith('sms:+1904') && decodeURIComponent(l).includes('Service moved: We meet at 11am')), links[0]);
+  T('every text says that replies do not show in the app', links.every(l => decodeURIComponent(l).includes('Replies to this text do not show in Church Connect')), links[0]);
   T('form is cleared after sending', await tab.evaluate(() => document.getElementById('broadcastTitle').value === '' && document.getElementById('broadcastBody').value === ''));
   T('no script errors', errors.length === 0, errors.join(' | ').slice(0, 200));
 });

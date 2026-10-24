@@ -107,7 +107,7 @@ async function openProfile(st) { const r = await open('connect.html', st); await
                   {user_id: 'u3', display_name: 'Brother Private', bio: '', directory_visible: true, directory_contact_visible: false, contact_email: null, gender: 'male', photo_path: `${CHURCH}/u3.jpg`, photo_visible: false},
                   {user_id: 'u4', display_name: 'Member Nogender', bio: '', directory_visible: true, directory_contact_visible: false, contact_email: null, gender: null, photo_path: null, photo_visible: false}];
   const st = {profile: profile(), directoryOthers: others}; const {tab, rec, errors} = await open('connect.html', st);
-  await tab.click('[data-view="directory"]'); await tab.type('#directorySearch', 'er'); await new Promise(r => setTimeout(r, 700));
+  await tab.click('.tabs [data-view="profile"]'); await tab.click('#profile .me-nav [data-view="directory"]'); await tab.type('#directorySearch', 'er'); await new Promise(r => setTimeout(r, 700));
   const rows = await tab.evaluate(() => [...document.querySelectorAll('#directoryList .list-item')].map(r => ({name: r.querySelector('strong')?.textContent, src: r.querySelector('.avatar img')?.getAttribute('src')})));
   const by = n => rows.find(r => r.name === n);
   T('a member who shares their photo shows it', by('Sister Shared') && /object\/sign\/member-photos\//.test(by('Sister Shared').src), JSON.stringify(rows));

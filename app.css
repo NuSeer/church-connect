@@ -61,3 +61,27 @@ input[type=checkbox],input[type=radio]{width:auto;flex:0 0 auto}
 
 /* Third color from Brand Studio: a soft band behind the public site sections so the main and accent colors do not clash */
 :root[data-tertiary] .section{background:color-mix(in srgb,var(--cc-public-tertiary) 22%,#fff)}
+
+/* Safety layer: message-request banner, guardians' read-only list, notification guide, larger text */
+.chat-banner{background:var(--church-tint,#f3f0fa);border:1px solid var(--church-line,#e3e6e6);border-radius:12px;padding:10px 14px;margin:8px 0}
+.chat-banner p{margin:0 0 8px}
+.guardian-chats{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+.cc-guide{margin:10px 0}.cc-guide summary{cursor:pointer;font-weight:700}.cc-guide ol{padding-left:20px}
+.cc-youth label{display:block;margin:8px 0}
+/* Larger text for easier reading (My Profile > Easier reading) */
+html.cc-large{font-size:125%}
+html.cc-large .btn,html.cc-large button,html.cc-large input,html.cc-large select,html.cc-large textarea{font-size:1.05rem}
+html.cc-large .btn{padding:14px 20px}
+html.cc-large .tab{padding:14px 16px}
+
+/* Me sub-navigation, Home cards, ministry home */
+.me-nav{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}
+.chip{border:1px solid var(--church-line,#d9d3ea);background:#fff;color:var(--church-ink,var(--cc-purple));border-radius:999px;padding:8px 16px;font:inherit;font-weight:700;cursor:pointer}
+.chip.active{background:var(--church-primary,var(--cc-purple));color:var(--on-primary,#fff);border-color:transparent}
+.home-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:12px 0 18px}
+.home-card{background:var(--church-tint,#f3f0fa);border:1px solid var(--church-line,#e3e6e6);border-radius:14px;padding:14px 16px}
+.home-card h3{margin:0 0 8px;font-size:1rem;color:var(--church-ink,var(--cc-purple))}
+.home-chat{display:block;margin:6px 0;width:100%;text-align:left}
+.cc-activity-card{border:1px solid var(--church-line,#e3e6e6);border-radius:14px;padding:12px 16px;margin:12px 0;background:#fff}
+.cc-activity-card h4{margin:0 0 4px}.cc-activity-card h5{margin:12px 0 4px}
+.cc-activity-form{background:var(--church-tint,#f3f0fa);border-radius:14px;padding:12px 16px;margin:10px 0}

@@ -1,3 +1,4 @@
+import {fileURLToPath} from 'node:url';
 // Runs the REAL Edge Function code (push + website-events sync) in Node with a fake database and fake network.
 // Usage: node edge-functions.test.mjs [path-to-events-fixture.json]   (needs: npm i esbuild)
 import * as esbuild from 'esbuild';
@@ -6,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-const repo = path.resolve(process.env.CC_REPO || 'D:/Projects/church-connect');
+const repo = path.resolve(process.env.CC_REPO || fileURLToPath(new URL('../',import.meta.url)));
 const fixture = process.argv[2];
 let fails = 0; const T = (n, ok, extra = '') => { if (!ok) fails++; console.log((ok ? 'PASS ' : 'FAIL ') + n + (ok && !extra ? '' : ' => ' + extra)) };
 
@@ -25,13 +26,13 @@ class Q {
     const T = (globalThis.__db[this.t] ??= []); const match = r => this.f.every(f => f(r));
     const keyOf = (r, cols) => cols.map(c => r[c] ?? null).join('|');
     if (this.op === 'select') { const rows = T.filter(match).map(r => ({...r})); if (this.mode === 'single') return rows.length ? {data: rows[0], error: null} : {data: null, error: {message: 'no rows'}}; if (this.mode === 'maybe') return {data: rows[0] ?? null, error: null}; return {data: rows, error: null} }
-    if (this.op === 'insert') { const u = UNIQUE[this.t]; for (const r of [].concat(this.p)) { if (u && r[u[0]] !== undefined && T.some(x => keyOf(x, u) === keyOf(r, u))) return {data: null, error: {code: '23505', message: 'duplicate key'}}; T.push({...r}) } return {data: null, error: null} }
-    if (this.op === 'upsert') { const cols = this.o.onConflict.split(','); for (const r of [].concat(this.p)) { const i = T.findIndex(x => keyOf(x, cols) === keyOf(r, cols)); if (i >= 0) T[i] = {...T[i], ...r}; else T.push({...r}) } return {data: null, error: null} }
+    if (this.op === 'insert') { const u = UNIQUE[this.t]; for (const r of [].concat(this.p)) { if (u && r[u[0]] !== undefined && T.some(x => keyOf(x, u) === keyOf(r, u))) return {data: null, error: {code: '23505', message: 'duplicate key'}}; T.push({id:crypto.randomUUID(),...r}) } return {data: null, error: null} }
+    if (this.op === 'upsert') { const cols = this.o.onConflict.split(','); for (const r of [].concat(this.p)) { const i = T.findIndex(x => keyOf(x, cols) === keyOf(r, cols)); if (i >= 0) T[i] = {...T[i], ...r}; else T.push({id:crypto.randomUUID(),...r}) } return {data: null, error: null} }
     if (this.op === 'update') { T.filter(match).forEach(r => Object.assign(r, this.p)); return {data: null, error: null} }
     if (this.op === 'delete') { globalThis.__db[this.t] = T.filter(r => !match(r)); return {data: null, error: null} }
   }
 }
-export function createClient() { return { from: t => new Q(t), auth: { getUser: async jwt => ({ data: { user: globalThis.__jwts[jwt] ?? null } }) } } }
+export function createClient() { return { rpc: async (name,p) => { if(name==='cc_push_recipient_ids'){const ids=(globalThis.__db.conversation_members||[]).filter(x=>x.conversation_id===p.p_conversation).map(x=>x.user_id);return {data:(globalThis.__db.member_profiles||[]).filter(x=>x.approved&&ids.includes(x.user_id)),error:null};}if(name!=='cc_claim_push') throw Error('Unexpected RPC '+name);const rows=(globalThis.__db.cc_push_attempts??=[]);let r=rows.find(x=>x.message_id===p.p_message&&x.subscription_id===p.p_subscription);if(r&&r.status!=='pending')return {data:false,error:null};if(r)r.status='sending';else rows.push({message_id:p.p_message,subscription_id:p.p_subscription,status:'sending'});return {data:true,error:null};}, from: t => new Q(t), auth: { getUser: async jwt => ({ data: { user: globalThis.__jwts[jwt] ?? null } }) } } }
 `;
 const stubWebpush = `export default { setVapidDetails() {}, sendNotification: async (sub, payload) => { if (globalThis.__expired?.has(sub.endpoint)) { const e = new Error('gone'); e.statusCode = 410; throw e } globalThis.__sent.push({endpoint: sub.endpoint, payload: JSON.parse(payload)}) } };`;
 
@@ -73,7 +74,7 @@ const SEC = {'x-cc-webhook-secret': 'sekret'};
   T('broadcast never reaches the other church', !eps().some(e => e.startsWith('ep-b-')));
   T('broadcast notification shows the title and opens Updates', globalThis.__sent[0].payload.title === 'Church announcement' && globalThis.__sent[0].payload.body === 'Service moved to 11am' && globalThis.__sent[0].payload.view === 'updates', JSON.stringify(globalThis.__sent[0].payload));
   globalThis.__sent = []; r = await post(handler, bc, SEC);
-  T('a retried webhook does not notify twice', globalThis.__sent.length === 0 && (await r.text()) === 'Duplicate');
+  T('a retried webhook does not notify twice', globalThis.__sent.length === 0 && (await r.json()).accepted === 0);
   globalThis.__sent = []; await post(handler, {...bc, record: {...bc.record, id: 'u2', ministry_id: 'min-a'}}, SEC);
   T('a ministry-only update is not a church-wide broadcast', globalThis.__sent.length === 0);
 
@@ -107,6 +108,13 @@ const SEC = {'x-cc-webhook-secret': 'sekret'};
 
   reset(base); await post(handler, {type: 'INSERT', table: 'messages', record: {id: 'm1', conversation_id: 'c1', sender_id: 'a-m1', body: 'secret text'}}, SEC);
   T('direct messages still notify only the other participant, without the message text', JSON.stringify(eps()) === JSON.stringify(['ep-a-m2']) && !JSON.stringify(globalThis.__sent).includes('secret text'));
+  reset(base); globalThis.__db.cc_chat_preferences=[{user_id:'a-m2',conversation_id:'c1',muted:true}];
+  await post(handler,{type:'INSERT',table:'messages',record:{id:'mute1',conversation_id:'c1',sender_id:'a-m1'}},SEC);
+  T('muted conversations do not send push',globalThis.__sent.length===0);
+  reset(base);globalThis.__db.cc_messaging_settings=[{user_id:'a-m2',quiet_start:0,quiet_end:23,timezone:'UTC'}];
+  const hour=new Date().getUTCHours();globalThis.__db.cc_messaging_settings[0].quiet_start=hour;globalThis.__db.cc_messaging_settings[0].quiet_end=(hour+1)%24;
+  await post(handler,{type:'INSERT',table:'messages',record:{id:'quiet1',conversation_id:'c1',sender_id:'a-m1'}},SEC);
+  T('quiet hours suppress push without changing messages',globalThis.__sent.length===0);
   reset(base); globalThis.__expired.add('ep-a-m1'); await post(handler, bc, SEC);
   T('an expired phone subscription (410) is removed', !globalThis.__db.member_push_subscriptions.some(s => s.endpoint === 'ep-a-m1'));
 }
@@ -161,7 +169,7 @@ const SEC = {'x-cc-webhook-secret': 'sekret'};
   if (!fixture) {
     feedJson.events = [{id: 1, title: 'Sunday Worship (updated)', date: '2026-11-01', time: '10:00 AM'}];
     globalThis.__db.churches[0].events_synced_at = null; await call('jwt-a-admin');
-    T('an edited event is updated in place', websiteRows(A).length === 1 && websiteRows(A)[0].title === 'Sunday Worship (updated)');
+    T('an edited event is updated in place', websiteRows(A).length === 1 && websiteRows(A)[0].title === 'Sunday Worship (updated)', JSON.stringify(websiteRows(A)));
     T('an event removed from the website is removed here', !websiteRows(A).some(e => e.external_id === '2'));
   }
   const keep = websiteRows(A).length;

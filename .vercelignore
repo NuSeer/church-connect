@@ -3,3 +3,7 @@
 *.md
 supabase
 tests
+package.json
+package-lock.json
+tools
+node_modules

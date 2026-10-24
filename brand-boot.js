@@ -31,6 +31,7 @@
     }
   }
   window.ccReadableOn = readableOn; window.ccApplyColors = apply;
+  try { if (localStorage.getItem('cc-large-text') === '1') document.documentElement.classList.add('cc-large') } catch (e) { /* no stored preference */ }
   try {
     var saved = JSON.parse(localStorage.getItem('cc-brand') || 'null');
     if (saved) {
