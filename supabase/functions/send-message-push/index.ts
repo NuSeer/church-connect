@@ -193,7 +193,8 @@ async function approvedNotice(m: any, old: any) {
     }),
   );
 }
-async function joinRequestAlert(m: any) {
+// again = the member is asking once more after a "no" (the request row is reset to pending, so it arrives as an UPDATE).
+async function joinRequestAlert(m: any, again = false) {
   if (!m?.user_id || !m?.ministry_id || m.status !== "pending")
     return new Response("Ignored", { status: 200 });
   const { data: ministry, error: me } = await db
@@ -208,10 +209,12 @@ async function joinRequestAlert(m: any) {
     .eq("user_id", m.user_id)
     .maybeSingle();
   return await approvalAlert(
-    "Ministry request",
-    `${String(person?.display_name || "A member").slice(0, 60)} asked to join ${String(ministry.name).slice(0, 60)}.`,
+    again ? "Ministry request (asking again)" : "Ministry request",
+    `${String(person?.display_name || "A member").slice(0, 60)} asked to join ${String(ministry.name).slice(0, 60)}${again ? " again" : ""}.`,
     ministry.church_id,
-    `join:${m.user_id}:${m.ministry_id}`,
+    again
+      ? `joinagain:${m.user_id}:${m.ministry_id}:${String(m.requested_at || "")}`
+      : `join:${m.user_id}:${m.ministry_id}`,
   );
 }
 // Tell the church's webmasters (members with the Webmaster permission, or the administrators if nobody has it) that a request is waiting.
@@ -327,7 +330,9 @@ Deno.serve(async (request) => {
     if (event.type === "INSERT" && event.table === "ministry_join_requests")
       return await joinRequestAlert(m);
     if (event.type === "UPDATE" && event.table === "ministry_join_requests")
-      return await joinDecisionNotice(m, event.old_record);
+      return m?.status === "pending" && event.old_record?.status === "rejected"
+        ? await joinRequestAlert(m, true)
+        : await joinDecisionNotice(m, event.old_record);
     if (event.type === "INSERT" && event.table === "cc_webmaster_requests")
       return await webmasterAlert(m);
     if (

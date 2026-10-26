@@ -105,6 +105,15 @@ const SEC = {'x-cc-webhook-secret': 'sekret'};
   T("ministry request alerts that church's administrators", JSON.stringify(eps()) === JSON.stringify(['ep-a-admin', 'ep-a-pastor']) && /asked to join Ushers/.test(globalThis.__sent[0].payload.body), JSON.stringify(globalThis.__sent[0]?.payload));
   globalThis.__sent = []; await post(handler, {type: 'INSERT', table: 'ministry_join_requests', record: {user_id: 'a-m1', ministry_id: 'min-a', status: 'approved'}}, SEC);
   T('a non-pending request triggers no alert', globalThis.__sent.length === 0);
+  globalThis.__sent = []; const again = {type: 'UPDATE', table: 'ministry_join_requests', record: {user_id: 'a-m1', ministry_id: 'min-a', status: 'pending', requested_at: '2026-10-26T10:00:00Z'}, old_record: {user_id: 'a-m1', ministry_id: 'min-a', status: 'rejected'}};
+  await post(handler, again, SEC);
+  T("asking again after a no alerts that church's administrators, saying again", JSON.stringify(eps()) === JSON.stringify(['ep-a-admin', 'ep-a-pastor']) && /asked to join Ushers again/.test(globalThis.__sent[0].payload.body), JSON.stringify(globalThis.__sent[0]?.payload));
+  globalThis.__sent = []; await post(handler, again, SEC);
+  T('a retried re-request is not announced twice', globalThis.__sent.length === 0);
+  globalThis.__sent = []; await post(handler, {...again, record: {...again.record, requested_at: '2026-10-27T10:00:00Z'}}, SEC);
+  T('a later second re-request alerts again', globalThis.__sent.length > 0);
+  globalThis.__sent = []; await post(handler, {type: 'UPDATE', table: 'ministry_join_requests', record: {user_id: 'a-m1', ministry_id: 'min-a', status: 'pending'}, old_record: {user_id: 'a-m1', ministry_id: 'min-a', status: 'pending'}}, SEC);
+  T('an update that is still pending sends nothing', globalThis.__sent.length === 0);
 
   reset(base); await post(handler, {type: 'INSERT', table: 'messages', record: {id: 'm1', conversation_id: 'c1', sender_id: 'a-m1', body: 'secret text'}}, SEC);
   T('direct messages still notify only the other participant, without the message text', JSON.stringify(eps()) === JSON.stringify(['ep-a-m2']) && !JSON.stringify(globalThis.__sent).includes('secret text'));
